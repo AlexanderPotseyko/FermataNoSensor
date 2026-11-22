@@ -206,6 +206,9 @@ public class NavBarMediator extends PrefNavBarMediator
 	@Nullable
 	@Override
 	public View focusSearch(NavBarView nb, View focused, int direction) {
+		View page = me.aap.fermata.ui.activity.CarInputSink.findView(nb.getRootView());
+		if ((page != null) && (direction == FOCUS_UP) && nb.isBottom()) return page;
+		if ((page != null) && (direction == FOCUS_RIGHT) && nb.isLeft()) return page;
 		if (direction == FOCUS_UP) {
 			if (!nb.isBottom()) return null;
 			Context ctx = nb.getContext();

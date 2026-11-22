@@ -63,6 +63,13 @@
     <string name="hide_bars_sub">Скрывать верхнюю и нижнюю панель, когда появляется панель управления</string>
     <string name="show_pg_up_down">Показывать кнопки вверх/вниз</string>
     <string name="use_dpad_cursor">Использовать курсор для D-pad навигации</string>
+    <string name="knob_log_section">Шайба</string>
+    <string name="knob_log_record">Записывать нажатия шайбы</string>
+    <string name="knob_log_record_sub">Пишет клавиши и движения в knob.log (около 1 МБ). Настройки открываются и на телефоне.</string>
+    <string name="knob_log_share">Поделиться логом</string>
+    <string name="knob_log_clear">Очистить лог</string>
+    <string name="knob_log_empty">Лог пуст. Покрутите шайбу в машине и откройте настройки на телефоне.</string>
+    <string name="knob_log_cleared">Лог очищен</string>
     <string name="fullscreen_mode">Полноэкранный режим</string>
     <string name="nav_bar_size">Размер панели навигации</string>
     <string name="tool_bar_size">Размер панели инструментов</string>

@@ -14,7 +14,12 @@ import android.content.Context;
 import android.os.SystemClock;
 import android.support.v4.media.session.PlaybackStateCompat;
 import android.util.AttributeSet;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.widget.EditText;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -29,7 +34,9 @@ import me.aap.fermata.addon.web.FermataChromeClient;
 import me.aap.fermata.addon.web.FermataJsInterface;
 import me.aap.fermata.addon.web.FermataWebView;
 import me.aap.fermata.media.service.MediaSessionCallback;
+import me.aap.fermata.ui.activity.CarInputSink;
 import me.aap.fermata.ui.activity.MainActivityDelegate;
+import me.aap.utils.ui.view.NavBarView;
 import me.aap.utils.async.FutureSupplier;
 import me.aap.utils.async.Promise;
 import me.aap.utils.log.Log;
@@ -38,7 +45,7 @@ import me.aap.utils.pref.PreferenceStore;
 /**
  * @author Andrey Pavlenko
  */
-public class YoutubeWebView extends FermataWebView {
+public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	private static final String CLEAR_HIGHEST_VIDEO_QUALITY_JS =
 			"function clearFermataQ() {\n" +
 					"  if (!window.__fermataQ) return;\n" +
@@ -201,8 +208,216 @@ public class YoutubeWebView extends FermataWebView {
 		attachListeners();
 		injectSponsorBlock();
 		addFocusHighlight();
+		installKnobJs();
 		CookieManager.getInstance().flush();
 	}
+
+	@Override
+	public boolean onCarKey(KeyEvent event) {
+		int code = event.getKeyCode();
+		if (!isKnobKey(code)) return false;
+		if (getRootView().findFocus() instanceof EditText) return false;
+		if (event.getAction() != KeyEvent.ACTION_DOWN) return code != KeyEvent.KEYCODE_BACK || canGoBack();
+		onKeyNavigation();
+		installKnobJs();
+		switch (code) {
+			case KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_NAVIGATE_NEXT ->
+					knob("fermataKnob.move(1)");
+			case KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_NAVIGATE_PREVIOUS ->
+					knob("fermataKnob.move(-1)");
+			case KeyEvent.KEYCODE_DPAD_RIGHT -> knob("fermataKnob.horizontal(1)");
+			case KeyEvent.KEYCODE_DPAD_LEFT -> knob("fermataKnob.horizontal(-1)");
+			case KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER ->
+					evaluateJavascript("fermataKnob.click()", value -> {
+						if ((value != null) && value.contains("input")) showKeyboard(null);
+					});
+			case KeyEvent.KEYCODE_BACK -> {
+				if (canGoBack()) goBack();
+				else return false;
+			}
+			default -> {
+			}
+		}
+		return true;
+	}
+
+	@Override
+	public boolean onCarMotion(MotionEvent event) {
+		if ((event.getAction() != MotionEvent.ACTION_SCROLL) ||
+				!(event.isFromSource(android.view.InputDevice.SOURCE_ROTARY_ENCODER) ||
+						(event.getAxisValue(MotionEvent.AXIS_SCROLL) != 0f))) return false;
+		if (getRootView().findFocus() instanceof EditText) return false;
+		float v = event.getAxisValue(MotionEvent.AXIS_SCROLL);
+		if (v == 0f) v = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+		if (v == 0f) return false;
+		onKeyNavigation();
+		installKnobJs();
+		knob(v > 0f ? "fermataKnob.move(1)" : "fermataKnob.move(-1)");
+		return true;
+	}
+
+	@Override
+	public View focusSearch(int direction) {
+		// Up, down and right stay on the page. Left can reach the nav bar.
+		if (direction == View.FOCUS_LEFT) return super.focusSearch(direction);
+		return this;
+	}
+
+	void knobSeek(int seconds) {
+		evaluateJavascript(
+				"(function(){var v=document.querySelector('video');var p=document.querySelector('#movie_player')||document.querySelector('.html5-video-player');var t=v?v.currentTime:0;var n=Math.max(0,t+(" +
+						seconds +
+						"));if(p&&typeof p.seekTo==='function')p.seekTo(n,true);else if(v)v.currentTime=n;})()",
+				null);
+	}
+
+	void knobToggle() {
+		evaluateJavascript(
+				"(function(){var v=document.querySelector('video');var p=document.querySelector('#movie_player')||document.querySelector('.html5-video-player');if(!v)return;if(v.paused){if(p&&p.playVideo)p.playVideo();else v.play();}else{if(p&&p.pauseVideo)p.pauseVideo();else v.pause();}})()",
+				null);
+	}
+
+	void focusNavBar() {
+		post(() -> {
+			MainActivityDelegate a = MainActivityDelegate.get(getContext());
+			if (a == null) return;
+			NavBarView nb = a.getNavBar();
+			if (nb != null) focusFirst(nb);
+		});
+	}
+
+	private void knob(String call) {
+		evaluateJavascript(call, null);
+	}
+
+	private void installKnobJs() {
+		int edge = YoutubeJsInterface.JS_KNOB_EDGE;
+		evaluateJavascript(KNOB_JS.replace("__EDGE__", Integer.toString(edge)), null);
+	}
+
+	private static boolean focusFirst(View v) {
+		if ((v.getVisibility() == View.VISIBLE) && v.isShown() && v.isFocusable() && v.requestFocus())
+			return true;
+		if (v instanceof ViewGroup group) {
+			for (int i = 0; i < group.getChildCount(); i++) {
+				if (focusFirst(group.getChildAt(i))) return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean isKnobKey(int code) {
+		return switch (code) {
+			case KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT,
+					KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+					KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_NAVIGATE_NEXT,
+					KeyEvent.KEYCODE_NAVIGATE_PREVIOUS, KeyEvent.KEYCODE_BACK -> true;
+			default -> false;
+		};
+	}
+
+	private static final String KNOB_JS = """
+			(function(){
+			  if (window.fermataKnob) return;
+			  var EDGE = __EDGE__;
+			  if (!document.getElementById('fermata-knob-style')) {
+			    var style = document.createElement('style');
+			    style.id = 'fermata-knob-style';
+			    style.textContent = '.fermata-knob{outline:3px solid #FFE600 !important;outline-offset:2px !important;border-radius:6px !important;}';
+			    (document.head || document.documentElement).appendChild(style);
+			  }
+			  function visible(e) {
+			    var r = e.getBoundingClientRect();
+			    if (r.width < 12 || r.height < 12) return false;
+			    if (r.bottom < 0 || r.top > window.innerHeight + 500) return false;
+			    var s = getComputedStyle(e);
+			    return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+			  }
+			  window.fermataKnob = {
+			    idx: -1,
+			    collect: function() {
+			      var nodes = document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[contenteditable="true"]');
+			      var out = [];
+			      for (var i = 0; i < nodes.length; i++) if (visible(nodes[i])) out.push(nodes[i]);
+			      out.sort(function(a, b) {
+			        var ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+			        if (Math.abs(ra.top - rb.top) > 24) return ra.top - rb.top;
+			        return ra.left - rb.left;
+			      });
+			      return out;
+			    },
+			    searchIndex: function(items) {
+			      for (var i = 0; i < items.length; i++) {
+			        var e = items[i];
+			        var t = ((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('placeholder')||'')+' '+(e.getAttribute('title')||'')+' '+(e.name||'')).toLowerCase();
+			        if (t.indexOf('search') >= 0 || t.indexOf('поиск') >= 0) return i;
+			      }
+			      return -1;
+			    },
+			    apply: function(items) {
+			      var prev = document.querySelectorAll('.fermata-knob');
+			      for (var i = 0; i < prev.length; i++) prev[i].classList.remove('fermata-knob');
+			      var el = items[this.idx];
+			      if (!el) return;
+			      el.classList.add('fermata-knob');
+			      try { el.focus({preventScroll:true}); } catch (e) { try { el.focus(); } catch (e2) {} }
+			      try { el.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) { el.scrollIntoView(false); }
+			    },
+			    move: function(dir) {
+			      var items = this.collect();
+			      if (!items.length) return;
+			      if (this.idx < 0 || !items[this.idx] || !items[this.idx].classList.contains('fermata-knob')) {
+			        var s = this.searchIndex(items);
+			        this.idx = (dir > 0 && s >= 0) ? s : (dir < 0 ? items.length - 1 : 0);
+			      } else {
+			        this.idx += (dir < 0 ? -1 : 1);
+			        if (this.idx < 0) this.idx = 0;
+			        if (this.idx >= items.length) this.idx = items.length - 1;
+			      }
+			      this.apply(items);
+			    },
+			    horizontal: function(dir) {
+			      var items = this.collect();
+			      if (!items.length) { if (dir < 0 && window.Fermata) Fermata.event(EDGE, 'left'); return; }
+			      if (this.idx < 0) this.idx = 0;
+			      var cur = items[this.idx] || items[0];
+			      var r = cur.getBoundingClientRect();
+			      var best = -1, bestD = 1e9;
+			      for (var i = 0; i < items.length; i++) {
+			        if (items[i] === cur) continue;
+			        var q = items[i].getBoundingClientRect();
+			        var dx = (q.left + q.width / 2) - (r.left + r.width / 2);
+			        if (dir < 0 && dx > -8) continue;
+			        if (dir > 0 && dx < 8) continue;
+			        var dy = Math.abs((q.top + q.height / 2) - (r.top + r.height / 2));
+			        if (dy > Math.max(80, r.height)) continue;
+			        var d = Math.abs(dx) + dy;
+			        if (d < bestD) { bestD = d; best = i; }
+			      }
+			      if (best < 0) {
+			        if (dir < 0 && window.Fermata) Fermata.event(EDGE, 'left');
+			        else this.move(dir);
+			        return;
+			      }
+			      this.idx = best;
+			      this.apply(items);
+			    },
+			    click: function() {
+			      var items = this.collect();
+			      var el = items[this.idx];
+			      if (!el) return 'none';
+			      var tag = el.tagName;
+			      if (tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable) {
+			        try { el.focus(); } catch (e) {}
+			        try { el.click(); } catch (e) {}
+			        return 'input';
+			      }
+			      try { el.click(); } catch (e) {}
+			      return 'ok';
+			    }
+			  };
+			})()
+			""";
 
 	protected void submitForm() {
 		if (!me.aap.fermata.BuildConfig.AUTO) return;

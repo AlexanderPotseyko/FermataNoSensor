@@ -25,7 +25,9 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.View;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
@@ -148,6 +150,22 @@ public class MainActivity extends SplitCompatActivityBase
 	@Override
 	public void onAddonChanged(AddonManager mgr, AddonInfo info, boolean installed) {
 		SplitCompat.installActivity(this);
+	}
+
+	@Override
+	public boolean dispatchKeyEvent(KeyEvent event) {
+		KnobLog.logKey(getCurrentFocus(), event);
+		View sink = (getWindow() == null) ? null : CarInputSink.findView(getWindow().getDecorView());
+		if ((sink instanceof CarInputSink input) && input.onCarKey(event)) return true;
+		return super.dispatchKeyEvent(event);
+	}
+
+	@Override
+	public boolean dispatchGenericMotionEvent(MotionEvent event) {
+		KnobLog.logMotion(getCurrentFocus(), event);
+		View sink = (getWindow() == null) ? null : CarInputSink.findView(getWindow().getDecorView());
+		if ((sink instanceof CarInputSink input) && input.onCarMotion(event)) return true;
+		return super.dispatchGenericMotionEvent(event);
 	}
 
 	@Override

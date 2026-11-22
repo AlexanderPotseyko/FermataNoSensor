@@ -47,6 +47,8 @@ import com.google.android.apps.auto.sdk.CarActivity;
 import com.google.android.apps.auto.sdk.CarUiController;
 
 import me.aap.fermata.R;
+import me.aap.fermata.ui.activity.CarInputSink;
+import me.aap.fermata.ui.activity.KnobLog;
 import me.aap.fermata.media.service.FermataMediaServiceConnection;
 import me.aap.fermata.ui.activity.FermataActivity;
 import me.aap.fermata.ui.activity.MainActivityDelegate;
@@ -113,7 +115,22 @@ public class MainCarActivity extends CarActivity implements FermataActivity {
 		ActivityDelegate.setContextToDelegate(ctx -> d);
 		delegate = completed(d);
 		d.onActivityCreate(state);
+		View decor = (getWindow() == null) ? null : getWindow().getDecorView();
+		if (decor != null) {
+			decor.setOnGenericMotionListener((v, event) -> {
+				KnobLog.logMotion(v.findFocus(), event);
+				View sink = CarInputSink.findView(v);
+				return (sink instanceof CarInputSink input) && input.onCarMotion(event);
+			});
+		}
 		return d;
+	}
+
+	private boolean handleKnob(KeyEvent event) {
+		View decor = (getWindow() == null) ? null : getWindow().getDecorView();
+		KnobLog.logKey((decor == null) ? null : decor.findFocus(), event);
+		View sink = CarInputSink.findView(decor);
+		return (sink instanceof CarInputSink input) && input.onCarKey(event);
 	}
 
 	@Override
@@ -252,6 +269,7 @@ public class MainCarActivity extends CarActivity implements FermataActivity {
 	@Override
 	public boolean onKeyUp(int keyCode, KeyEvent keyEvent) {
 		Log.i(keyEvent);
+		if (handleKnob(keyEvent)) return true;
 		MainActivityDelegate d = delegate.peek();
 		if (d == null) return super.onKeyUp(keyCode, keyEvent);
 
@@ -283,6 +301,7 @@ public class MainCarActivity extends CarActivity implements FermataActivity {
 	@Override
 	public boolean onKeyDown(int keyCode, KeyEvent keyEvent) {
 		Log.i(keyEvent);
+		if (handleKnob(keyEvent)) return true;
 		MainActivityDelegate d = delegate.peek();
 		if (d == null) return super.onKeyDown(keyCode, keyEvent);
 		if (!d.getPrefs().useDpadCursor(d)) return d.onKeyDown(keyCode, keyEvent, super::onKeyDown);

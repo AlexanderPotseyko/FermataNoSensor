@@ -17,6 +17,7 @@ public class YoutubeJsInterface extends FermataJsInterface {
 	public static final int JS_VIDEO_QUALITIES = JS_LAST + 5;
 	public static final int JS_FULL_SCREEN = JS_LAST + 6;
 	public static final int JS_VIDEO_PROGRESS = JS_LAST + 7;
+	public static final int JS_KNOB_EDGE = JS_LAST + 8;
 	private final YoutubeMediaEngine engine;
 	private Promise<String> result;
 
@@ -61,6 +62,9 @@ public class YoutubeJsInterface extends FermataJsInterface {
 				break;
 			case JS_FULL_SCREEN:
 				((YoutubeWebView) getWebView()).videoFullScreen = "VIDEO".equals(data);
+				break;
+			case JS_KNOB_EDGE:
+				if ("left".equals(data)) getYoutubeWebView().focusNavBar();
 				break;
 			default:
 				super.handleEvent(event, data);

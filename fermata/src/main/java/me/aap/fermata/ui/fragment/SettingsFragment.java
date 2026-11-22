@@ -68,6 +68,7 @@ import me.aap.fermata.media.pref.MediaLibPrefs;
 import me.aap.fermata.media.service.MediaSessionListener;
 import me.aap.fermata.media.pref.MediaPrefs;
 import me.aap.fermata.media.pref.PlaybackControlPrefs;
+import me.aap.fermata.ui.activity.KnobLog;
 import me.aap.fermata.ui.activity.MainActivityDelegate;
 import me.aap.fermata.ui.activity.MainActivityListener;
 import me.aap.fermata.ui.activity.MainActivityPrefs;
@@ -332,6 +333,22 @@ public class SettingsFragment extends MainActivityFragment
 			o.cmp = String::compareTo;
 			o.stringValues = CollectionUtils.mapToArray(MainActivityPrefs.Lang.getValues(),
 					v -> v.locale.getDisplayName(), String[]::new);
+		});
+
+		sub1 = set.subSet(o -> o.title = R.string.knob_log_section);
+		sub1.addBooleanPref(o -> {
+			o.store = a.getPrefs();
+			o.pref = MainActivityPrefs.KNOB_LOG;
+			o.title = R.string.knob_log_record;
+			o.subtitle = R.string.knob_log_record_sub;
+		});
+		sub1.addButton(o -> {
+			o.title = R.string.knob_log_share;
+			o.onClick = () -> KnobLog.share(a.getContext());
+		});
+		sub1.addButton(o -> {
+			o.title = R.string.knob_log_clear;
+			o.onClick = () -> KnobLog.clear(a.getContext());
 		});
 
 		sub1 = set.subSet(o -> o.title = R.string.key_bindings);

@@ -9,6 +9,12 @@ FermataNoSensor is a personal Android Auto build for YouTube only. It installs s
 
 The release signing key is in `signing/` (see `signing/README.md`). It is committed on purpose so later personal builds update the same install. Do not publish this keystore.
 
+The launcher icon is the original mark on a red background with a yellow ring, including the adaptive icon and the Android Auto media icon.
+
+On the YouTube page the rotary knob (DPAD up/down or `SOURCE_ROTARY_ENCODER` scroll) moves a yellow focus outline and scrolls the item into view. The first downward step prefers the search field; center opens the car keyboard. Center clicks other items. Left at the left edge moves focus to the Fermata bar. In the full-screen player, center pauses or plays, rotation seeks by 10 seconds, and back leaves the player.
+
+Settings on the phone (Шайба) record those events to `knob.log` (about 1 MB) and can share or clear the file. Pointer drags are not stored.
+
 
 ## Fermata Media Player
 [![Download the latest APK](https://img.shields.io/github/v/release/AndreyPavlenko/Fermata?label=Download%20APK&logo=github&style=for-the-badge)](https://github.com/AndreyPavlenko/Fermata/releases/latest)
