@@ -3,7 +3,8 @@ if (gradle.ext.enableGoogleServices) apply plugin: 'com.google.gms.google-servic
 android {
     defaultConfig {
         namespace = 'me.aap.fermata'
-        applicationId project.getProperties().getOrDefault('APP_ID', 'me.aap.fermata')
+        applicationId project.getProperties().getOrDefault('APP_ID', 'by.potseyko.fermatanosensor')
+        buildConfigField "boolean", 'YOUTUBE_ONLY', 'true'
         versionCode VERSION_CODE
         versionName VERSION_NAME
         base.archivesName = "fermata-$versionName"
@@ -60,9 +61,10 @@ android {
     productFlavors {
         mobile {
             dimension "version"
+            applicationIdSuffix '.mobile'
             resValue "string", "app_name", project.getProperties()
-                    .getOrDefault('APP_NAME', "@string/app_name_mobile")
-            resValue "string", "media_service_name", "@string/media_service_name_mobile"
+                    .getOrDefault('APP_NAME', "FermataNoSensor")
+            resValue "string", "media_service_name", "FermataNoSensor"
             resValue "drawable", "media_service_icon", "@drawable/launcher"
             buildConfigField "boolean", 'AUTO', 'false'
             buildConfigField "boolean", 'ENABLE_GS', "${gradle.ext.enableGoogleServices}"
@@ -70,10 +72,9 @@ android {
 
         auto {
             dimension "version"
-            applicationIdSuffix '.auto' + project.getProperties().getOrDefault('APP_ID_SFX', '')
             resValue "string", "app_name", project.getProperties()
-                    .getOrDefault('APP_NAME', "@string/app_name_auto")
-            resValue "string", "media_service_name", "@string/media_service_name_auto"
+                    .getOrDefault('APP_NAME', "FermataNoSensor")
+            resValue "string", "media_service_name", "FermataNoSensor"
             resValue "drawable", "media_service_icon", "@drawable/media_service"
             buildConfigField "boolean", 'AUTO', 'true'
             buildConfigField "boolean", 'ENABLE_GS', "${gradle.ext.enableGoogleServices}"

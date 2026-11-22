@@ -321,9 +321,15 @@ public class NavBarMediator extends PrefNavBarMediator
 		Set<String> names = newLinkedHashSet(BuildConfig.ADDONS.length + 4);
 		String[] pref = getPreferenceStore(nb).getStringArrayPref(getPref(nb));
 		CollectionUtils.addAll(names, pref);
-		names.add("folders");
-		names.add("favorites");
-		names.add("playlists");
+		if (BuildConfig.YOUTUBE_ONLY) {
+			names.remove("folders");
+			names.remove("favorites");
+			names.remove("playlists");
+		} else {
+			names.add("folders");
+			names.add("favorites");
+			names.add("playlists");
+		}
 		for (AddonInfo ai : BuildConfig.ADDONS) {
 			FermataAddon a = amgr.getAddon(ai.className);
 			if (a instanceof FermataFragmentAddon) names.add(ai.className);

@@ -1,6 +1,15 @@
 ## !!!Be aware of scam!!! The sites like https :// fermata-auto . com  are 100% scam. This app is free and opensource!
 
 
+## FermataNoSensor
+
+This repository is a modified fork of [Fermata](https://github.com/AndreyPavlenko/Fermata) by Andrey Pavlenko, released under the GNU GPL-3.0 (see `LICENSE`). The original author credit is unchanged.
+
+FermataNoSensor is a personal Android Auto build for YouTube only. It installs side by side with the original Fermata (`applicationId` `by.potseyko.fermatanosensor`, launcher name FermataNoSensor). IPTV, remote libraries, Cast, chat, mirror-mode launcher entries and the other unused add-ons are left out of this build. ExoPlayer, MediaPlayer and VLC, including the hardware-decoding setting, stay available.
+
+The release signing key is in `signing/` (see `signing/README.md`). It is committed on purpose so later personal builds update the same install. Do not publish this keystore.
+
+
 ## Fermata Media Player
 [![Download the latest APK](https://img.shields.io/github/v/release/AndreyPavlenko/Fermata?label=Download%20APK&logo=github&style=for-the-badge)](https://github.com/AndreyPavlenko/Fermata/releases/latest)
 

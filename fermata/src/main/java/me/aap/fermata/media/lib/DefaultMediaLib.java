@@ -166,9 +166,15 @@ public class DefaultMediaLib extends BasicEventBroadcaster<PreferenceStore.Liste
 			getLastPlayedItem().then(i -> (i == null) ? completedNull() : i.asMediaItem())
 					.onSuccess(i -> {
 						if (i != null) items.add(i);
-					}).then(v -> getFolders().asMediaItem()).onSuccess(items::add)
-					.then(v -> getFavorites().asMediaItem()).onSuccess(items::add)
-					.then(v -> getPlaylists().asMediaItem()).onSuccess(items::add)
+					})					.then(v -> getFolders().asMediaItem()).onSuccess(i -> {
+						if (!BuildConfig.YOUTUBE_ONLY && (i != null)) items.add(i);
+					})
+					.then(v -> getFavorites().asMediaItem()).onSuccess(i -> {
+						if (!BuildConfig.YOUTUBE_ONLY && (i != null)) items.add(i);
+					})
+					.then(v -> getPlaylists().asMediaItem()).onSuccess(i -> {
+						if (!BuildConfig.YOUTUBE_ONLY && (i != null)) items.add(i);
+					})
 
 					.then(v -> Async.forEach(i -> i.asMediaItem().onSuccess(items::add),
 							CollectionUtils.map(AddonManager.get().getAddons(MediaLibAddon.class),
