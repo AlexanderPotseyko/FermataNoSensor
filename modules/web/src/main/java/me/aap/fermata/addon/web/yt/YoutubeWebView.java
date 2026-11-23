@@ -8,9 +8,11 @@ import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_VIDEO_FOUND;
 import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_VIDEO_PAUSED;
 import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_VIDEO_PLAYING;
 import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_VIDEO_PROGRESS;
+import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_TV_DIAG;
 import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_VIDEO_QUALITIES;
 
 import android.content.Context;
+import android.net.Uri;
 import android.os.SystemClock;
 import android.support.v4.media.session.PlaybackStateCompat;
 import android.util.AttributeSet;
@@ -19,6 +21,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.WebSettings;
 import android.widget.EditText;
 
 import androidx.annotation.NonNull;
@@ -33,19 +36,30 @@ import me.aap.fermata.BuildConfig;
 import me.aap.fermata.addon.web.FermataChromeClient;
 import me.aap.fermata.addon.web.FermataJsInterface;
 import me.aap.fermata.addon.web.FermataWebView;
+import me.aap.fermata.addon.web.WebBrowserAddon;
 import me.aap.fermata.media.service.MediaSessionCallback;
 import me.aap.fermata.ui.activity.CarInputSink;
+import me.aap.fermata.ui.activity.KnobLog;
 import me.aap.fermata.ui.activity.MainActivityDelegate;
+import me.aap.fermata.ui.activity.MainActivityPrefs;
 import me.aap.utils.ui.view.NavBarView;
 import me.aap.utils.async.FutureSupplier;
 import me.aap.utils.async.Promise;
 import me.aap.utils.log.Log;
 import me.aap.utils.pref.PreferenceStore;
+import me.aap.utils.ui.UiUtils;
 
 /**
  * @author Andrey Pavlenko
  */
 public class YoutubeWebView extends FermataWebView implements CarInputSink {
+	// VacuumTube's short Cobalt string. It was the one that kept youtube.com/tv on the leanback UI.
+	private static final String TV_UA =
+			"Mozilla/5.0 (PS4; Leanback Shell) Cobalt/26.lts.0-qa; compatible;";
+	private static final String TV_HOME = "https://www.youtube.com/tv";
+	static final String WEB_HOME = "https://m.youtube.com";
+	private boolean tvFallback;
+	private long rootBackAt;
 	private static final String CLEAR_HIGHEST_VIDEO_QUALITY_JS =
 			"function clearFermataQ() {\n" +
 					"  if (!window.__fermataQ) return;\n" +
@@ -93,15 +107,48 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	}
 
 	@Override
+	public void init(WebBrowserAddon addon, me.aap.fermata.addon.web.FermataWebClient webClient,
+									 FermataChromeClient chromeClient) {
+		super.init(addon, webClient, chromeClient);
+		MainActivityPrefs.get().addBroadcastListener(this);
+		prepareMode();
+	}
+
+	static boolean tvSelected() {
+		return MainActivityPrefs.get().getIntPref(MainActivityPrefs.YT_UI_MODE) ==
+				MainActivityPrefs.YT_MODE_TV;
+	}
+
+	static String homeUrl() {
+		return tvSelected() ? TV_HOME : WEB_HOME;
+	}
+
+	public boolean tvActive() {
+		return tvSelected() && !tvFallback;
+	}
+
+	private void prepareMode() {
+		WebSettings settings = getSettings();
+		if (tvActive()) settings.setUserAgentString(TV_UA);
+		else settings.setUserAgentString(null);
+		KnobLog.session(tvActive() ? "tv" : (tvFallback ? "web-fallback" : "web"));
+	}
+
+	@Override
 	public void onPreferenceChanged(PreferenceStore store, List<PreferenceStore.Pref<?>> prefs) {
 		super.onPreferenceChanged(store, prefs);
+		if (prefs.contains(MainActivityPrefs.YT_UI_MODE)) {
+			tvFallback = false;
+			prepareMode();
+			if (isAttachedToWindow()) loadUrl(homeUrl());
+		}
 
-		if (getAddon().autoHighestQualityChanged(prefs)) {
+		if (!tvActive() && (getAddon() != null) && getAddon().autoHighestQualityChanged(prefs)) {
 			if (getAddon().autoHighestQuality()) setHighestVideoQuality();
 			else clearHighestVideoQuality();
 		}
 
-		if (YoutubeSponsorBlock.isPreferenceChanged(prefs)) injectSponsorBlock();
+		if (!tvActive() && YoutubeSponsorBlock.isPreferenceChanged(prefs)) injectSponsorBlock();
 	}
 
 	@Override
@@ -121,7 +168,10 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	public void onActivityEvent(MainActivityDelegate a, long e) {
 		// The page is gone with its activity (e.g. Fermata Auto exited from Android Auto), and nothing
 		// can continue its playback. Switching to another section only detaches it until it's shown again.
-		if ((e == ACTIVITY_DESTROY) && (js != null)) js.pageRemoved();
+		if (e == ACTIVITY_DESTROY) {
+			MainActivityPrefs.get().removeBroadcastListener(this);
+			if (js != null) js.pageRemoved();
+		}
 		super.onActivityEvent(a, e);
 	}
 
@@ -191,6 +241,7 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 
 	@Override
 	protected void urlChanged(String url) {
+		KnobLog.note("url " + url);
 		if (YoutubeUrls.isVideoUrl(url)) {
 			// Another video opened before the reopened one started
 			if ((reopening != null) &&
@@ -205,6 +256,12 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 
 	@Override
 	protected void pageLoaded(String uri) {
+		if (leaveTv(uri, "load")) return;
+		if (tvActive()) {
+			installTvDiag();
+			CookieManager.getInstance().flush();
+			return;
+		}
 		attachListeners();
 		injectSponsorBlock();
 		addFocusHighlight();
@@ -212,8 +269,146 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 		CookieManager.getInstance().flush();
 	}
 
+	void onTvLoadError(String description) {
+		if (!tvSelected() || tvFallback) return;
+		tvFallback = true;
+		KnobLog.note("tv fallback (load error: " + description + "): " + getUrl());
+		prepareMode();
+		Context ctx = getContext();
+		UiUtils.showInfo(ctx, ctx.getString(me.aap.fermata.R.string.yt_tv_fallback));
+		post(() -> loadUrl(WEB_HOME));
+	}
+
+	private boolean leaveTv(String url, String why) {
+		if (!tvSelected() || tvFallback || tvUrlOk(url)) return false;
+		tvFallback = true;
+		KnobLog.note("tv fallback (" + why + "): " + url);
+		prepareMode();
+		Context ctx = getContext();
+		UiUtils.showInfo(ctx, ctx.getString(me.aap.fermata.R.string.yt_tv_fallback));
+		post(() -> loadUrl(WEB_HOME));
+		return true;
+	}
+
+	static boolean tvUrlOk(String url) {
+		if ((url == null) || url.isEmpty() || url.startsWith("about:blank")) return true;
+		Uri uri = Uri.parse(url);
+		String host = uri.getHost();
+		if (host == null) return true;
+		host = host.toLowerCase(java.util.Locale.US);
+		if (host.equals("accounts.google.com") || host.equals("google.com") || host.endsWith(".google.com"))
+			return true;
+		if (host.endsWith("gstatic.com") || host.endsWith("googleapis.com") || host.endsWith("ggpht.com"))
+			return true;
+		if (host.equals("yt.be") || host.equals("youtu.be")) return true;
+		if (host.startsWith("consent.")) return true;
+		if (host.endsWith("youtube.com") && !host.endsWith("tv.youtube.com")) {
+			if (host.startsWith("m.")) return false;
+			String path = uri.getPath();
+			if (path == null) return false;
+			return path.equals("/tv") || path.startsWith("/tv/") || path.startsWith("/activate") ||
+					path.startsWith("/signin");
+		}
+		return false;
+	}
+
+	private boolean atTvRoot() {
+		String url = getUrl();
+		if ((url == null) || !tvUrlOk(url)) return false;
+		Uri uri = Uri.parse(url);
+		String path = uri.getPath();
+		if ((path == null) || !(path.equals("/tv") || path.startsWith("/tv/"))) return false;
+		String fragment = uri.getFragment();
+		return (fragment == null) || fragment.isEmpty() || fragment.equals("/") || fragment.equals("/surface");
+	}
+
+	private void sendKey(int code) {
+		if (!hasFocus()) requestFocus();
+		long time = SystemClock.uptimeMillis();
+		super.dispatchKeyEvent(new KeyEvent(time, time, KeyEvent.ACTION_DOWN, code, 0));
+		super.dispatchKeyEvent(new KeyEvent(time, time, KeyEvent.ACTION_UP, code, 0));
+	}
+
+	private int rotationKey(boolean forward) {
+		boolean horizontal = MainActivityPrefs.get().getIntPref(MainActivityPrefs.YT_KNOB_AXIS) ==
+				MainActivityPrefs.YT_KNOB_HORIZONTAL;
+		if (horizontal) return forward ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
+		return forward ? KeyEvent.KEYCODE_DPAD_DOWN : KeyEvent.KEYCODE_DPAD_UP;
+	}
+
+	private boolean onTvKey(KeyEvent event) {
+		int code = event.getKeyCode();
+		if (!isKnobKey(code)) return false;
+		if (getRootView().findFocus() instanceof EditText) return false;
+		if (code == KeyEvent.KEYCODE_BACK) return onTvBack(event);
+		if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+		switch (code) {
+			case KeyEvent.KEYCODE_DPAD_DOWN -> sendKey(rotationKey(true));
+			case KeyEvent.KEYCODE_DPAD_UP -> sendKey(rotationKey(false));
+			case KeyEvent.KEYCODE_DPAD_LEFT -> sendKey(KeyEvent.KEYCODE_DPAD_LEFT);
+			case KeyEvent.KEYCODE_DPAD_RIGHT -> sendKey(KeyEvent.KEYCODE_DPAD_RIGHT);
+			case KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER ->
+					sendKey(KeyEvent.KEYCODE_ENTER);
+			default -> {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private boolean onTvBack(KeyEvent event) {
+		boolean second = atTvRoot() && (rootBackAt != 0) &&
+				(SystemClock.uptimeMillis() - rootBackAt) < 1500;
+		if (event.getAction() != KeyEvent.ACTION_DOWN) return !second;
+		if (!atTvRoot() || !second) {
+			if (atTvRoot()) rootBackAt = SystemClock.uptimeMillis();
+			else rootBackAt = 0;
+			sendKey(KeyEvent.KEYCODE_ESCAPE);
+			return true;
+		}
+		rootBackAt = 0;
+		return false;
+	}
+
+	@Override
+	protected void onKeyNavigation() {
+		if (tvActive()) return;
+		super.onKeyNavigation();
+	}
+
+	private void installTvDiag() {
+		evaluateJavascript(
+				"if (!window.__fermataTvDiag) {\n" +
+						"window.__fermataTvDiag = true;\n" +
+						"function fermataTvReport(v, why) {\n" +
+						"  " + JS_EVENT + "(" + JS_TV_DIAG + ", why + ' ready=' + v.readyState + ' t=' + Math.floor(v.currentTime) + ' paused=' + v.paused + ' ' + location.href);\n" +
+						"}\n" +
+						"function fermataTvScan() {\n" +
+						"  var vids = document.querySelectorAll('video');\n" +
+						"  for (var i = 0; i < vids.length; i++) {\n" +
+						"    var v = vids[i];\n" +
+						"    if (v.__ftv) continue;\n" +
+						"    v.__ftv = 1;\n" +
+						"    v.addEventListener('loadeddata', function() { fermataTvReport(this, 'loadeddata'); });\n" +
+						"    v.addEventListener('playing', function() { fermataTvReport(this, 'playing'); });\n" +
+						"    if (v.readyState > 0) fermataTvReport(v, 'ready');\n" +
+						"  }\n" +
+						"  setTimeout(fermataTvScan, 2000);\n" +
+						"}\n" +
+						"setTimeout(function() {\n" +
+						"  var vids = document.querySelectorAll('video');\n" +
+						"  var live = false;\n" +
+						"  for (var i = 0; i < vids.length; i++) if (vids[i].readyState > 0) live = true;\n" +
+						"  if (!live) " + JS_EVENT + "(" + JS_TV_DIAG + ", 'video readyState=0 count=' + vids.length + ' ' + location.href);\n" +
+						"}, 8000);\n" +
+						"fermataTvScan();\n" +
+						"}\n",
+				null);
+	}
+
 	@Override
 	public boolean onCarKey(KeyEvent event) {
+		if (tvActive()) return onTvKey(event);
 		int code = event.getKeyCode();
 		if (!isKnobKey(code)) return false;
 		if (getRootView().findFocus() instanceof EditText) return false;
@@ -243,6 +438,17 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 
 	@Override
 	public boolean onCarMotion(MotionEvent event) {
+		if (tvActive()) {
+			if ((event.getAction() != MotionEvent.ACTION_SCROLL) ||
+					!(event.isFromSource(android.view.InputDevice.SOURCE_ROTARY_ENCODER) ||
+							(event.getAxisValue(MotionEvent.AXIS_SCROLL) != 0f))) return false;
+			if (getRootView().findFocus() instanceof EditText) return false;
+			float v = event.getAxisValue(MotionEvent.AXIS_SCROLL);
+			if (v == 0f) v = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+			if (v == 0f) return false;
+			sendKey(rotationKey(v > 0f));
+			return true;
+		}
 		if ((event.getAction() != MotionEvent.ACTION_SCROLL) ||
 				!(event.isFromSource(android.view.InputDevice.SOURCE_ROTARY_ENCODER) ||
 						(event.getAxisValue(MotionEvent.AXIS_SCROLL) != 0f))) return false;
@@ -258,6 +464,8 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 
 	@Override
 	public View focusSearch(int direction) {
+		// The TV page draws its own focus. Keep Android focus on the WebView.
+		if (tvActive()) return this;
 		// Up, down and right stay on the page. Left can reach the nav bar.
 		if (direction == View.FOCUS_LEFT) return super.focusSearch(direction);
 		return this;

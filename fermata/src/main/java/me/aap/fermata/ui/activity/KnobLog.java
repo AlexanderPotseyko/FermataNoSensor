@@ -39,6 +39,7 @@ public final class KnobLog {
 	private static final SimpleDateFormat TIME =
 			new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US);
 	private static long lastHash;
+	private static volatile String mode = "web";
 
 	private KnobLog() {
 	}
@@ -50,6 +51,20 @@ public final class KnobLog {
 
 	public static File file() {
 		return new File(FermataApplication.get().getFilesDir(), "knob.log");
+	}
+
+	/** Marks the YouTube mode for the following lines. Writes a session header when logging is on. */
+	public static void session(String next) {
+		mode = (next == null) || next.isEmpty() ? "web" : next;
+		if (!enabled()) return;
+		String header = stamp() + " mode=" + mode + " --- session\n";
+		IO.execute(() -> append(header));
+	}
+
+	public static void note(String text) {
+		if (!enabled() || (text == null)) return;
+		String line = stamp() + " mode=" + mode + " note " + text + "\n";
+		IO.execute(() -> append(line));
 	}
 
 	public static void logKey(View focus, KeyEvent event) {
@@ -119,7 +134,7 @@ public final class KnobLog {
 	}
 
 	private static String line(KeyEvent event, String focus) {
-		return stamp() + " key action=" + action(event.getAction()) +
+		return stamp() + " mode=" + mode + " key action=" + action(event.getAction()) +
 				" code=" + KeyEvent.keyCodeToString(event.getKeyCode()) +
 				"(" + event.getKeyCode() + ") repeat=" + event.getRepeatCount() +
 				" source=0x" + Integer.toHexString(event.getSource()) +
@@ -128,7 +143,7 @@ public final class KnobLog {
 	}
 
 	private static String line(MotionEvent event, String focus) {
-		return stamp() + " motion action=" + action(event.getActionMasked()) +
+		return stamp() + " mode=" + mode + " motion action=" + action(event.getActionMasked()) +
 				" source=0x" + Integer.toHexString(event.getSource()) +
 				" device=" + device(event.getDeviceId()) +
 				" scroll=" + event.getAxisValue(MotionEvent.AXIS_SCROLL) +

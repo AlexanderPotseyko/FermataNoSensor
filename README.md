@@ -13,7 +13,9 @@ The launcher icon is the original mark on a red background with a yellow ring, i
 
 On the YouTube page the rotary knob (DPAD up/down or `SOURCE_ROTARY_ENCODER` scroll) moves a yellow focus outline and scrolls the item into view. The first downward step prefers the search field; center opens the car keyboard. Center clicks other items. Left at the left edge moves focus to the Fermata bar. In the full-screen player, center pauses or plays, rotation seeks by 10 seconds, and back leaves the player.
 
-Settings on the phone (Шайба) record those events to `knob.log` (about 1 MB) and can share or clear the file. Pointer drags are not stored.
+Settings on the phone (Шайба) record those events to `knob.log` (about 1 MB) and can share or clear the file. Pointer drags are not stored. Each line includes the YouTube mode.
+
+Settings → YouTube → «Режим YouTube» defaults to «Веб-страница». «ТВ-режим (эксперимент)» loads `https://www.youtube.com/tv` with the VacuumTube Cobalt user agent. Cookies stay in the app WebView. Sign in from the code on that page at `https://www.youtube.com/activate` in another browser. «Поворот шайбы в ТВ-режиме» defaults to up/down. If `/tv` redirects away, that visit falls back to the web page. Web mode keeps the yellow focus outline.
 
 
 ## Fermata Media Player

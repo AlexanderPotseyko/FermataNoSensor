@@ -335,6 +335,25 @@ public class SettingsFragment extends MainActivityFragment
 					v -> v.locale.getDisplayName(), String[]::new);
 		});
 
+		sub1 = set.subSet(o -> o.title = R.string.yt_section);
+		sub1.addListPref(o -> {
+			o.store = a.getPrefs();
+			o.pref = MainActivityPrefs.YT_UI_MODE;
+			o.title = R.string.yt_ui_mode;
+			o.subtitle = R.string.yt_ui_mode_sub;
+			o.values = new int[]{R.string.yt_ui_web, R.string.yt_ui_tv};
+			o.valuesMap = new int[]{MainActivityPrefs.YT_MODE_WEB, MainActivityPrefs.YT_MODE_TV};
+		});
+		sub1.addListPref(o -> {
+			o.store = a.getPrefs();
+			o.pref = MainActivityPrefs.YT_KNOB_AXIS;
+			o.title = R.string.yt_knob_axis;
+			o.subtitle = R.string.string_format;
+			o.formatSubtitle = true;
+			o.values = new int[]{R.string.yt_knob_vertical, R.string.yt_knob_horizontal};
+			o.valuesMap = new int[]{MainActivityPrefs.YT_KNOB_VERTICAL, MainActivityPrefs.YT_KNOB_HORIZONTAL};
+		});
+
 		sub1 = set.subSet(o -> o.title = R.string.knob_log_section);
 		sub1.addBooleanPref(o -> {
 			o.store = a.getPrefs();

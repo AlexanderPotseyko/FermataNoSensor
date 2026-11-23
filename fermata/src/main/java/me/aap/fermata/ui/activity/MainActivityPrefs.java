@@ -56,6 +56,13 @@ public interface MainActivityPrefs
 			YOUTUBE_ONLY ? "me.aap.fermata.addon.web.yt.YoutubeAddon" : null);
 	Pref<BooleanSupplier> CHECK_UPDATES = Pref.b("CHECK_UPDATES", true);
 	Pref<BooleanSupplier> KNOB_LOG = Pref.b("KNOB_LOG", true);
+	int YT_MODE_WEB = 0;
+	int YT_MODE_TV = 1;
+	int YT_KNOB_VERTICAL = 0;
+	int YT_KNOB_HORIZONTAL = 1;
+	// Web is the default. TV mode is an experiment and is off until chosen.
+	Pref<IntSupplier> YT_UI_MODE = Pref.i("YT_UI_MODE", YT_MODE_WEB);
+	Pref<IntSupplier> YT_KNOB_AXIS = Pref.i("YT_KNOB_AXIS", YT_KNOB_VERTICAL);
 	Pref<LongSupplier> CHECK_UPDATES_STAMP = Pref.l("CHECK_UPDATES_STAMP", 0);
 	Pref<BooleanSupplier> SYS_BARS_ON_VIDEO_TOUCH = Pref.b("SYS_BARS_ON_VIDEO_TOUCH", false);
 	Pref<BooleanSupplier> LANDSCAPE_VIDEO = Pref.b("LANDSCAPE_VIDEO", false);

@@ -70,6 +70,15 @@
     <string name="knob_log_clear">Очистить лог</string>
     <string name="knob_log_empty">Лог пуст. Покрутите шайбу в машине и откройте настройки на телефоне.</string>
     <string name="knob_log_cleared">Лог очищен</string>
+    <string name="yt_section">YouTube</string>
+    <string name="yt_ui_mode">Режим YouTube</string>
+    <string name="yt_ui_mode_sub">Веб-страница — текущее поведение. ТВ-режим (эксперимент) открывает youtube.com/tv. Вход: код на экране, затем youtube.com/activate на другом устройстве.</string>
+    <string name="yt_ui_web">Веб-страница</string>
+    <string name="yt_ui_tv">ТВ-режим (эксперимент)</string>
+    <string name="yt_knob_axis">Поворот шайбы в ТВ-режиме</string>
+    <string name="yt_knob_vertical">вверх/вниз</string>
+    <string name="yt_knob_horizontal">влево/вправо</string>
+    <string name="yt_tv_fallback">ТВ-режим не открылся. До следующего входа в YouTube показана веб-страница.</string>
     <string name="fullscreen_mode">Полноэкранный режим</string>
     <string name="nav_bar_size">Размер панели навигации</string>
     <string name="tool_bar_size">Размер панели инструментов</string>

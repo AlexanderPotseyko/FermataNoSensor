@@ -83,8 +83,10 @@ public class YoutubeFragment extends WebBrowserFragment implements FermataServic
 				}
 			}
 			YoutubeWebView.Video video = v;
-			webView.loadUrl(DEFAULT_URL);
-			if ((video != null) && !DEFAULT_URL.equals(video.url())) a.post(() -> webView.reopen(video));
+			webView.loadUrl(YoutubeWebView.homeUrl());
+			// TV mode keeps its own page. Reopening a mobile watch URL would leave it.
+			if (!YoutubeWebView.tvSelected() && (video != null) && !DEFAULT_URL.equals(video.url()))
+				a.post(() -> webView.reopen(video));
 		});
 	}
 
@@ -169,6 +171,8 @@ public class YoutubeFragment extends WebBrowserFragment implements FermataServic
 			FermataWebView v = getWebView();
 			MainActivityDelegate a = MainActivityDelegate.get(getContext());
 			if (v == null) return;
+			// The TV page plays inside the WebView. Fermata full screen would hide it.
+			if ((v instanceof YoutubeWebView yw) && yw.tvActive()) return;
 
 			FermataChromeClient chrome = v.getWebChromeClient();
 			if (chrome == null) return;
