@@ -238,6 +238,7 @@ public class MediaSessionCallback extends MediaSessionCompat.Callback
 		currentState = new PlaybackStateCompat.Builder().setActions(SUPPORTED_ACTIONS).build();
 		setPlaybackState(currentState);
 		session.setActive(true);
+		me.aap.fermata.ui.activity.TvTransport.setPlayback(this::noteTvPlayback);
 
 		audioManager = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
 
@@ -643,6 +644,25 @@ public class MediaSessionCallback extends MediaSessionCompat.Callback
 				Log.i("No media found for query: " + query + ". Playing last item");
 			}
 		});
+	}
+
+	public void noteTvPlayback(boolean playerOpen, boolean paused) {
+		if (!playerOpen) return;
+		if ((audioManager != null) && (audioFocusReq != null)) {
+			AudioManagerCompat.requestAudioFocus(audioManager, audioFocusReq);
+		}
+		if (!session.isActive()) session.setActive(true);
+		int st = paused ? STATE_PAUSED : STATE_PLAYING;
+		if ((currentState.getState() == st) && (metadata != null)) return;
+		PlaybackStateCompat state = new PlaybackStateCompat.Builder()
+				.setActions(ACTION_PLAY | ACTION_PAUSE | ACTION_PLAY_PAUSE | ACTION_STOP |
+						ACTION_SKIP_TO_NEXT | ACTION_SKIP_TO_PREVIOUS | ACTION_SEEK_TO)
+				.setState(st, 0, paused ? 0f : 1f).build();
+		setPlaybackState(state);
+		session.setMetadata(new MediaMetadataCompat.Builder()
+				.putString(METADATA_KEY_DISPLAY_TITLE, "YouTube")
+				.putString(METADATA_KEY_DISPLAY_SUBTITLE, "FermataNoSensor").build());
+		Log.i("TV media session " + (paused ? "paused" : "playing"));
 	}
 
 	@Override

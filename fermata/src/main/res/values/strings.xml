@@ -71,7 +71,7 @@
     <string name="use_dpad_cursor">Use cursor for D-pad navigation</string>
     <string name="knob_log_section">Шайба</string>
     <string name="knob_log_record">Записывать нажатия шайбы</string>
-    <string name="knob_log_record_sub">Пишет клавиши и движения в knob.log (около 1 МБ). Настройки открываются и на телефоне.</string>
+    <string name="knob_log_record_sub">Пишет клавиши и движения в Android/data/by.potseyko.fermatanosensor/files/knob.log (около 1 МБ). Выключите, чтобы остановить подробный лог.</string>
     <string name="knob_log_share">Поделиться логом</string>
     <string name="knob_log_clear">Очистить лог</string>
     <string name="knob_log_empty">Лог пуст. Покрутите шайбу в машине и откройте настройки на телефоне.</string>
@@ -96,6 +96,7 @@
     <string name="yt_loading">Загрузка YouTube…</string>
     <string name="yt_retrying">Повтор %1$d…</string>
     <string name="yt_load_error">Страница не открылась</string>
+    <string name="yt_share_saved">Ссылка сохранена. В машине YouTube откроет это видео с того же места.</string>
     <string name="yt_tv_fallback">ТВ-режим не открылся. До следующего входа в YouTube показана веб-страница.</string>
     <string name="fullscreen_mode">Fullscreen mode</string>
     <string name="nav_bar_size">Navigation bar size</string>

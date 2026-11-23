@@ -25,6 +25,7 @@ import me.aap.fermata.media.service.FermataServiceUiBinder;
 import me.aap.fermata.media.service.MediaSessionCallback;
 import me.aap.fermata.ui.activity.MainActivityDelegate;
 import me.aap.fermata.ui.activity.MainActivityPrefs;
+import me.aap.fermata.ui.activity.YoutubeShare;
 import me.aap.fermata.ui.view.VideoView;
 import me.aap.utils.function.LongSupplier;
 import me.aap.utils.log.Log;
@@ -92,10 +93,19 @@ public class YoutubeFragment extends WebBrowserFragment implements FermataServic
 				}
 			}
 			YoutubeWebView.Video video = v;
+			if (a.isCarActivity()) {
+				YoutubeShare.Link shared = YoutubeShare.take(a.getContext());
+				if (shared != null) {
+					video = new YoutubeWebView.Video(shared.watchUrl(), shared.sec() * 1000L, false);
+					Log.i("Continue in the car: ", shared.watchUrl(), " at ", shared.sec());
+				}
+			}
 			webView.loadUrl(YoutubeWebView.homeUrl());
-			// TV mode keeps its own page. Reopening a mobile watch URL would leave it.
-			if (!YoutubeWebView.tvSelected() && (video != null) && !DEFAULT_URL.equals(video.url()))
-				a.post(() -> webView.reopen(video));
+			YoutubeWebView.Video open = video;
+			if ((open != null) && !DEFAULT_URL.equals(open.url())) {
+				if (YoutubeWebView.tvSelected()) a.post(() -> webView.openTvVideo(open));
+				else a.post(() -> webView.reopen(open));
+			}
 		});
 	}
 
@@ -162,6 +172,17 @@ public class YoutubeFragment extends WebBrowserFragment implements FermataServic
 	public void onResume() {
 		super.onResume();
 		applyCarChrome(false);
+		MainActivityDelegate.getActivityDelegate(getContext()).onSuccess(a -> {
+			if (!a.isCarActivity()) return;
+			YoutubeShare.Link shared = YoutubeShare.take(a.getContext());
+			YoutubeWebView web = getWebView();
+			if ((shared == null) || (web == null)) return;
+			YoutubeWebView.Video video =
+					new YoutubeWebView.Video(shared.watchUrl(), shared.sec() * 1000L, false);
+			Log.i("Continue in the car: ", shared.watchUrl(), " at ", shared.sec());
+			if (web.tvActive()) web.openTvVideo(video);
+			else web.reopen(video);
+		});
 		if (!playOnResume) return;
 		playOnResume = false;
 		MainActivityDelegate.getActivityDelegate(getContext()).onSuccess(a -> {
@@ -174,10 +195,14 @@ public class YoutubeFragment extends WebBrowserFragment implements FermataServic
 
 	private void applyCarChrome(boolean forceShow) {
 		MainActivityDelegate a = MainActivityDelegate.getActivityDelegate(getContext()).peek();
-		if ((a == null) || (a.getNavBar() == null)) return;
-		boolean hide = !forceShow && a.isCarActivityNotMirror() && YoutubeWebView.tvSelected() &&
-				!a.getPrefs().getBooleanPref(MainActivityPrefs.YT_CAR_PANEL);
-		a.getNavBar().setVisibility(hide || a.isBarsHidden() ? View.GONE : View.VISIBLE);
+		if (a == null) return;
+		boolean tvCar = !forceShow && a.isCarActivityNotMirror() && YoutubeWebView.tvSelected();
+		boolean hideBar = tvCar && !a.getPrefs().getBooleanPref(MainActivityPrefs.YT_CAR_PANEL);
+		if (a.getNavBar() != null)
+			a.getNavBar().setVisibility(hideBar || a.isBarsHidden() ? View.GONE : View.VISIBLE);
+		// The round arrow is Fermata's floating button. Knob BACK replaces it on the car TV screen.
+		if (a.getFloatingButton() != null)
+			a.getFloatingButton().setVisibility(tvCar ? View.GONE : View.VISIBLE);
 	}
 
 	public void loadUrl(String url) {

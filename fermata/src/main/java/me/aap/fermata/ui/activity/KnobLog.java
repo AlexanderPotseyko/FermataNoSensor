@@ -50,7 +50,10 @@ public final class KnobLog {
 	}
 
 	public static File file() {
-		return new File(FermataApplication.get().getFilesDir(), "knob.log");
+		Context ctx = FermataApplication.get();
+		File dir = ctx.getExternalFilesDir(null);
+		if ((dir == null) || (!dir.isDirectory() && !dir.mkdirs())) dir = ctx.getFilesDir();
+		return new File(dir, "knob.log");
 	}
 
 	/** Marks the YouTube mode for the following lines. Writes a session header when logging is on. */
@@ -64,6 +67,7 @@ public final class KnobLog {
 	public static void note(String text) {
 		if (!enabled() || (text == null)) return;
 		String line = stamp() + " mode=" + mode + " note " + text + "\n";
+		Log.i("knob " + text);
 		IO.execute(() -> append(line));
 	}
 

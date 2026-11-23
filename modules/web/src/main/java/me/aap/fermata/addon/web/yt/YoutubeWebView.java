@@ -41,6 +41,7 @@ import me.aap.fermata.addon.web.WebBrowserAddon;
 import me.aap.fermata.media.service.MediaSessionCallback;
 import me.aap.fermata.ui.activity.CarInputSink;
 import me.aap.fermata.ui.activity.KnobLog;
+import me.aap.fermata.ui.activity.KnobMap;
 import me.aap.fermata.ui.activity.MainActivityDelegate;
 import me.aap.fermata.ui.activity.MainActivityPrefs;
 import me.aap.fermata.ui.activity.TvTransport;
@@ -62,9 +63,13 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	static final String WEB_HOME = "https://m.youtube.com";
 	private boolean tvFallback;
 	private boolean playerOpen;
+	private boolean playerPaused;
+	private String tvHref;
+	private int pendingSeekSec;
+	private long lastBackUptime;
+	private android.window.OnBackInvokedCallback tvBackCallback;
 	private boolean injecting;
 	private long lastMotionAt;
-	private long lastBackAt;
 	private int lastTvKey;
 	private boolean mainFrameFailed;
 	private boolean allowFocusLeave;
@@ -149,6 +154,7 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 			if (!isOurFocus(newFocus)) post(this::requestFocus);
 		};
 		addFocusLogger();
+		registerTvBack();
 	}
 
 	void setTvHost(TvHost host) {
@@ -163,6 +169,7 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	protected void onAttachedToWindow() {
 		super.onAttachedToWindow();
 		addFocusLogger();
+		registerTvBack();
 	}
 
 	private void addFocusLogger() {
@@ -178,7 +185,38 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 		if ((root != null) && (focusLogger != null)) {
 			root.getViewTreeObserver().removeOnGlobalFocusChangeListener(focusLogger);
 		}
+		if ((android.os.Build.VERSION.SDK_INT >= 33) && (tvBackCallback != null)) {
+			android.window.OnBackInvokedDispatcher dispatcher = findOnBackInvokedDispatcher();
+			if (dispatcher != null) dispatcher.unregisterOnBackInvokedCallback(tvBackCallback);
+			tvBackCallback = null;
+		}
 		super.onDetachedFromWindow();
+	}
+
+	private void registerTvBack() {
+		if ((android.os.Build.VERSION.SDK_INT < 33) || (tvBackCallback != null) || !isAttachedToWindow())
+			return;
+		android.window.OnBackInvokedDispatcher dispatcher = findOnBackInvokedDispatcher();
+		if (dispatcher == null) return;
+		tvBackCallback = () -> onBackPath("webview-back");
+		dispatcher.registerOnBackInvokedCallback(
+				android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY, tvBackCallback);
+		KnobLog.note("back callback webview PRIORITY_OVERLAY");
+	}
+
+	@Override
+	public android.view.inputmethod.InputConnection onCreateInputConnection(
+			android.view.inputmethod.EditorInfo outAttrs) {
+		android.view.inputmethod.InputConnection base = super.onCreateInputConnection(outAttrs);
+		if ((base == null) || !tvActive()) return base;
+		return new android.view.inputmethod.InputConnectionWrapper(base, true) {
+			@Override
+			public boolean sendKeyEvent(KeyEvent event) {
+				KnobLog.note("path=input " + describeKey(event, true, "input"));
+				if (onTvKey(event, "input")) return true;
+				return super.sendKeyEvent(event);
+			}
+		};
 	}
 
 	void allowFocusLeave() {
@@ -222,6 +260,21 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 			@Override
 			public boolean seek(int seconds) {
 				return tvSeek(seconds);
+			}
+
+			@Override
+			public boolean onKey(KeyEvent event, String path) {
+				return onTvKey(event, path);
+			}
+
+			@Override
+			public boolean onMotion(MotionEvent event, String path) {
+				return consumeTvMotion(event);
+			}
+
+			@Override
+			public boolean onBack(String path) {
+				return onBackPath(path);
 			}
 		} : null);
 	}
@@ -426,7 +479,7 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	}
 
 	private boolean atTvRoot() {
-		String url = getUrl();
+		String url = (tvHref != null) ? tvHref : getUrl();
 		if ((url == null) || !tvUrlOk(url)) return false;
 		Uri uri = Uri.parse(url);
 		String path = uri.getPath();
@@ -459,45 +512,49 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 		}
 	}
 
-	private boolean clockwise(boolean upOrNegative) {
-		boolean invert = MainActivityPrefs.get().getBooleanPref(MainActivityPrefs.YT_KNOB_INVERT);
-		// DHU/MHS2 rotate-right arrives as DPAD_UP (the page then moves up). Default is clockwise = next.
-		return invert ? !upOrNegative : upOrNegative;
-	}
-
-	private int rotationKey(boolean forward) {
-		boolean horizontal = MainActivityPrefs.get().getIntPref(MainActivityPrefs.YT_KNOB_AXIS) ==
-				MainActivityPrefs.YT_KNOB_HORIZONTAL;
-		if (horizontal) return forward ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
-		return forward ? KeyEvent.KEYCODE_DPAD_DOWN : KeyEvent.KEYCODE_DPAD_UP;
-	}
-
 	boolean menuOpen() {
 		return (tvHost != null) && tvHost.isOpen();
 	}
 
-	private boolean onTvKey(KeyEvent event) {
+	private boolean lastTvHandled;
+
+	private boolean onTvKey(KeyEvent event, String path) {
 		int code = event.getKeyCode();
+		KnobLog.note("path=" + path + " " + describeKey(event, true, path));
 		int stamp = code ^ (event.getAction() << 16) ^ (int) event.getEventTime();
-		if (stamp == lastTvKey) return true;
+		if (stamp == lastTvKey) return lastTvHandled;
 		lastTvKey = stamp;
+		return lastTvHandled = handleTvKey(event, code);
+	}
+
+	private boolean handleTvKey(KeyEvent event, int code) {
 		if ((tvHost != null) && tvHost.isOpen()) {
-			if ((code == KeyEvent.KEYCODE_BACK) && (event.getAction() == KeyEvent.ACTION_DOWN))
-				tvHost.closeMenu();
-			return true;
+			if (code == KeyEvent.KEYCODE_BACK) {
+				if (event.getAction() == KeyEvent.ACTION_DOWN) tvHost.closeMenu();
+				return true;
+			}
+			KnobMap.Move menuRot = knobRotation(code, event.getSource(), 0f);
+			if (menuRot != KnobMap.Move.NONE) {
+				if (event.getAction() == KeyEvent.ACTION_DOWN) applyRotation(menuRot);
+				return true;
+			}
+			return false;
 		}
 		if (isMediaKey(code)) return onMediaKey(event);
 		if (!isKnobKey(code) && (code != KeyEvent.KEYCODE_BACK)) return false;
 		if (getRootView().findFocus() instanceof EditText) return false;
-		if (code == KeyEvent.KEYCODE_BACK) return onTvBack(event);
-		if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
-		if (playerOpen && ((code == KeyEvent.KEYCODE_DPAD_UP) || (code == KeyEvent.KEYCODE_DPAD_DOWN))) {
-			tvSeek(clockwise(code == KeyEvent.KEYCODE_DPAD_UP) ? 10 : -10);
+		if (code == KeyEvent.KEYCODE_BACK) return onBackPath("key");
+		KnobMap.Move rot = knobRotation(code, event.getSource(), 0f);
+		if (rot != KnobMap.Move.NONE) {
+			if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+			applyRotation(rot);
+			KnobLog.note("rotate " + rot + " from " + KeyEvent.keyCodeToString(code));
 			return true;
 		}
+		if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
 		switch (code) {
-			case KeyEvent.KEYCODE_DPAD_DOWN -> sendKey(rotationKey(clockwise(false)));
-			case KeyEvent.KEYCODE_DPAD_UP -> sendKey(rotationKey(clockwise(true)));
+			case KeyEvent.KEYCODE_DPAD_DOWN -> sendKey(KeyEvent.KEYCODE_DPAD_DOWN);
+			case KeyEvent.KEYCODE_DPAD_UP -> sendKey(KeyEvent.KEYCODE_DPAD_UP);
 			case KeyEvent.KEYCODE_DPAD_LEFT -> sendKey(KeyEvent.KEYCODE_DPAD_LEFT);
 			case KeyEvent.KEYCODE_DPAD_RIGHT -> sendKey(KeyEvent.KEYCODE_DPAD_RIGHT);
 			case KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
@@ -511,21 +568,61 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 		return true;
 	}
 
-	private boolean onTvBack(KeyEvent event) {
-		if (event.getEventTime() == lastBackAt) return true;
-		if (event.getAction() == KeyEvent.ACTION_DOWN) lastBackAt = event.getEventTime();
-		if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+	private boolean onBackPath(String path) {
+		KnobLog.note("back path=" + path + " player=" + (playerOpen ? 1 : 0) + " href=" + tvHref);
+		if (!tvActive()) return false;
+		long now = SystemClock.uptimeMillis();
+		if (now - lastBackUptime < 450) return true;
+		lastBackUptime = now;
 		if ((tvHost != null) && tvHost.isOpen()) {
 			tvHost.closeMenu();
 			return true;
 		}
-		if (playerOpen || !atTvRoot()) {
-			sendKey(KeyEvent.KEYCODE_ESCAPE);
+		if (playerOpen || ((tvHref != null) && tvHref.contains("watch"))) {
+			leavePlayer(path);
+			return true;
+		}
+		if (!atTvRoot()) {
+			KnobLog.note("back " + path + " history");
+			evaluateJavascript("history.back()", null);
 			return true;
 		}
 		if (tvHost != null) tvHost.showMenu();
-		else sendKey(KeyEvent.KEYCODE_ESCAPE);
+		else evaluateJavascript("history.back()", null);
 		return true;
+	}
+
+	private void leavePlayer(String path) {
+		KnobLog.note("back " + path + " leave player");
+		evaluateJavascript("history.back()", null);
+		postDelayed(() -> {
+			if (!playerOpen) {
+				KnobLog.note("back player closed");
+				return;
+			}
+			KnobLog.note("back player still open, load /tv");
+			loadUrl(TV_HOME);
+		}, 800);
+	}
+
+	private KnobMap.Move knobRotation(int keyCode, int source, float scroll) {
+		boolean invert = MainActivityPrefs.get().getBooleanPref(MainActivityPrefs.YT_KNOB_INVERT);
+		boolean horizontal = MainActivityPrefs.get().getIntPref(MainActivityPrefs.YT_KNOB_AXIS) ==
+				MainActivityPrefs.YT_KNOB_HORIZONTAL;
+		return KnobMap.rotation(keyCode, source, scroll, invert, horizontal);
+	}
+
+	private void applyRotation(KnobMap.Move rot) {
+		if ((tvHost != null) && tvHost.isOpen()) {
+			moveMenuFocus((rot == KnobMap.Move.DOWN) || (rot == KnobMap.Move.RIGHT));
+			return;
+		}
+		if (playerOpen) {
+			tvSeek(((rot == KnobMap.Move.DOWN) || (rot == KnobMap.Move.RIGHT)) ? 10 : -10);
+			return;
+		}
+		int code = KnobMap.keyCode(rot);
+		if (code != 0) sendKey(code);
 	}
 
 	private boolean onMediaKey(KeyEvent event) {
@@ -566,9 +663,39 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 
 	void onTvState(String data) {
 		boolean open = (data != null) && data.contains("player=1");
-		if (open == playerOpen) return;
+		boolean paused = (data == null) || data.contains("paused=1");
+		if (data != null) {
+			int href = data.indexOf(" http");
+			if (href > 0) tvHref = data.substring(href + 1).trim();
+		}
+		if (open && (pendingSeekSec > 0)) {
+			int sec = pendingSeekSec;
+			pendingSeekSec = 0;
+			tvSeekTo(sec);
+		}
+		if ((open == playerOpen) && (paused == playerPaused)) return;
 		playerOpen = open;
-		KnobLog.note("player " + (open ? "open" : "closed") + " " + data);
+		playerPaused = paused;
+		KnobLog.note("player " + (open ? "open" : "closed") + " paused=" + (paused ? 1 : 0) + " " + data);
+		TvTransport.playback(open, paused);
+	}
+
+	void openTvVideo(Video video) {
+		String id = YoutubeUrls.videoId(video.url());
+		pendingSeekSec = (int) (video.position() / 1000L);
+		if (id.isEmpty()) {
+			loadUrl(video.url());
+			return;
+		}
+		loadUrl(TV_HOME + "#/watch?v=" + id);
+	}
+
+	private void tvSeekTo(int sec) {
+		evaluateJavascript(
+				"(function(){var v=document.querySelector('video');if(!v)return;try{v.currentTime=" + sec +
+						";}catch(e){}})()",
+				null);
+		KnobLog.note("seek to " + sec);
 	}
 
 	private void notePlayer(String url, boolean log) {
@@ -581,10 +708,11 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	@Override
 	public boolean dispatchKeyEvent(KeyEvent event) {
 		if (injecting || !tvActive()) return super.dispatchKeyEvent(event);
-		boolean consumed = onTvKey(event);
+		boolean consumed = onTvKey(event, "webview");
 		String by = ((tvHost != null) && tvHost.isOpen()) ? "menu" : (consumed ? "tv" : "pass");
 		if (!consumed) consumed = super.dispatchKeyEvent(event);
 		KnobLog.note(describeKey(event, consumed, by));
+		if (menuOpen()) return consumed;
 		return consumed || holdsFocus(event);
 	}
 
@@ -596,8 +724,6 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 
 	boolean consumeTvMotion(MotionEvent event) {
 		if (!tvActive()) return false;
-		if (event.getEventTime() == lastMotionAt) return true;
-		lastMotionAt = event.getEventTime();
 		if ((event.getAction() != MotionEvent.ACTION_SCROLL) ||
 				!(event.isFromSource(android.view.InputDevice.SOURCE_ROTARY_ENCODER) ||
 						(event.getAxisValue(MotionEvent.AXIS_SCROLL) != 0f) ||
@@ -605,15 +731,12 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 		float v = event.getAxisValue(MotionEvent.AXIS_SCROLL);
 		if (v == 0f) v = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
 		if (v == 0f) return false;
-		boolean consumed = true;
-		if ((tvHost != null) && tvHost.isOpen()) {
-			moveMenuFocus(clockwise(v < 0f));
-		} else if (playerOpen) {
-			tvSeek(clockwise(v < 0f) ? 10 : -10);
-		} else {
-			sendKey(rotationKey(clockwise(v < 0f)));
-		}
-		KnobLog.note("motion scroll=" + v + " consumed=" + consumed + " by=tv");
+		if (event.getEventTime() == lastMotionAt) return true;
+		lastMotionAt = event.getEventTime();
+		KnobMap.Move rot = knobRotation(0, event.getSource(), v);
+		applyRotation(rot);
+		KnobLog.note("path=motion scroll=" + v + " mapped=" + rot + " source=0x" +
+				Integer.toHexString(event.getSource()));
 		return true;
 	}
 
@@ -698,16 +821,22 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 						"function fermataTvState() {\n" +
 						"  var h = location.hash || '';\n" +
 						"  var open = h.indexOf('watch') >= 0;\n" +
-						"  if (!open) {\n" +
-						"    var v = document.querySelector('video');\n" +
-						"    if (v) {\n" +
-						"      var r = v.getBoundingClientRect();\n" +
-						"      open = r.width > innerWidth * 0.55 && r.height > innerHeight * 0.45 && v.readyState > 0;\n" +
-						"    }\n" +
+						"  var v = document.querySelector('video');\n" +
+						"  if (!open && v) {\n" +
+						"    var r = v.getBoundingClientRect();\n" +
+						"    open = r.width > innerWidth * 0.55 && r.height > innerHeight * 0.45 && v.readyState > 0;\n" +
 						"  }\n" +
-						"  " + JS_EVENT + "(" + JS_TV_DIAG + ", 'state player=' + (open ? 1 : 0) + ' ' + location.href);\n" +
+						"  var skip = document.querySelector('ytlr-skip-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, button[aria-label*=\"Skip\"], button[aria-label*=\"Пропустить\"]');\n" +
+						"  if (skip) { try { skip.focus(); } catch (e) {} }\n" +
+						"  var paused = !v || v.paused ? 1 : 0;\n" +
+						"  " + JS_EVENT + "(" + JS_TV_DIAG + ", 'state player=' + (open ? 1 : 0) + ' paused=' + paused + ' ' + location.href);\n" +
 						"}\n" +
-						"setInterval(fermataTvState, 1500);\n" +
+						"if (!window.__ftvState) {\n" +
+						"  window.__ftvState = 1;\n" +
+						"  window.addEventListener('hashchange', fermataTvState);\n" +
+						"  window.addEventListener('popstate', fermataTvState);\n" +
+						"}\n" +
+						"setInterval(fermataTvState, 400);\n" +
 						"setTimeout(function() {\n" +
 						"  var vids = document.querySelectorAll('video');\n" +
 						"  var live = false;\n" +
@@ -722,7 +851,7 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	@Override
 	public boolean onCarKey(KeyEvent event) {
 		if (tvActive()) {
-			boolean consumed = onTvKey(event);
+			boolean consumed = onTvKey(event, "activity");
 			KnobLog.note(describeKey(event, consumed, "activity"));
 			return consumed;
 		}
@@ -838,7 +967,7 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 			  if (!document.getElementById('fermata-knob-style')) {
 			    var style = document.createElement('style');
 			    style.id = 'fermata-knob-style';
-			    style.textContent = '.fermata-knob{outline:3px solid #FFE600 !important;outline-offset:2px !important;border-radius:6px !important;}';
+			    style.textContent = '.fermata-knob{outline:4px solid #FFE600 !important;outline-offset:3px !important;border-radius:8px !important;box-shadow:0 0 0 2px #111 !important;}';
 			    (document.head || document.documentElement).appendChild(style);
 			  }
 			  function visible(e) {
@@ -850,10 +979,28 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 			  }
 			  window.fermataKnob = {
 			    idx: -1,
+			    named: function(e) {
+			      var t = ((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('placeholder')||'')+' '+(e.getAttribute('title')||'')+' '+(e.innerText||'')+' '+(e.name||'')).replace(/\\s+/g,' ').trim();
+			      return t;
+			    },
+			    useful: function(e) {
+			      if (e.closest && e.closest('[aria-hidden="true"], ytd-ad-slot-renderer, .ytd-display-ad-renderer, #masthead-ad')) return false;
+			      if (e.getAttribute('tabindex') === '-1' && e.tagName !== 'INPUT') return false;
+			      var tag = e.tagName;
+			      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.isContentEditable) return true;
+			      var name = this.named(e);
+			      if (!name) return false;
+			      if (e.closest && e.closest('ytd-guide-entry-renderer') && name.length < 2) return false;
+			      return true;
+			    },
+			    skip: function() {
+			      var b = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, button[aria-label*="Skip"], button[aria-label*="Пропустить"]');
+			      return (b && visible(b)) ? b : null;
+			    },
 			    collect: function() {
-			      var nodes = document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[contenteditable="true"]');
+			      var nodes = document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[contenteditable="true"]');
 			      var out = [];
-			      for (var i = 0; i < nodes.length; i++) if (visible(nodes[i])) out.push(nodes[i]);
+			      for (var i = 0; i < nodes.length; i++) if (visible(nodes[i]) && this.useful(nodes[i])) out.push(nodes[i]);
 			      out.sort(function(a, b) {
 			        var ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
 			        if (Math.abs(ra.top - rb.top) > 24) return ra.top - rb.top;
@@ -879,6 +1026,15 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 			      try { el.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) { el.scrollIntoView(false); }
 			    },
 			    move: function(dir) {
+			      var skip = this.skip();
+			      if (skip) {
+			        var prev = document.querySelectorAll('.fermata-knob');
+			        for (var i = 0; i < prev.length; i++) prev[i].classList.remove('fermata-knob');
+			        skip.classList.add('fermata-knob');
+			        try { skip.focus(); } catch (e) {}
+			        try { skip.scrollIntoView({block:'center'}); } catch (e) {}
+			        return;
+			      }
 			      var items = this.collect();
 			      if (!items.length) return;
 			      if (this.idx < 0 || !items[this.idx] || !items[this.idx].classList.contains('fermata-knob')) {
@@ -918,6 +1074,8 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 			      this.apply(items);
 			    },
 			    click: function() {
+			      var skip = this.skip();
+			      if (skip) { try { skip.click(); } catch (e) {} return 'ok'; }
 			      var items = this.collect();
 			      var el = items[this.idx];
 			      if (!el) return 'none';

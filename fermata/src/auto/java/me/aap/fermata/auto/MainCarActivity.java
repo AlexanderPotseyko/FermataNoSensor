@@ -22,6 +22,7 @@ import android.graphics.PorterDuff;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.StateListDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.OperationCanceledException;
 import android.os.SystemClock;
@@ -31,12 +32,14 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.window.OnBackInvokedDispatcher;
 import android.webkit.WebView;
 import android.widget.EditText;
 import android.widget.TextView.OnEditorActionListener;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.content.res.AppCompatResources;
+import androidx.appcompat.view.WindowCallbackWrapper;
 import androidx.appcompat.widget.AppCompatImageView;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.fragment.app.FragmentManager;
@@ -49,6 +52,7 @@ import com.google.android.apps.auto.sdk.CarUiController;
 import me.aap.fermata.R;
 import me.aap.fermata.ui.activity.CarInputSink;
 import me.aap.fermata.ui.activity.KnobLog;
+import me.aap.fermata.ui.activity.TvTransport;
 import me.aap.fermata.media.service.FermataMediaServiceConnection;
 import me.aap.fermata.ui.activity.FermataActivity;
 import me.aap.fermata.ui.activity.MainActivityDelegate;
@@ -73,6 +77,7 @@ public class MainCarActivity extends CarActivity implements FermataActivity {
 			(FutureSupplier<MainActivityDelegate>) NO_DELEGATE;
 	private CarEditText editText;
 	private TextWatcher textWatcher;
+	private boolean inputHooks;
 
 	@NonNull
 	@Override
@@ -89,6 +94,7 @@ public class MainCarActivity extends CarActivity implements FermataActivity {
 	public void onCreate(Bundle savedInstanceState) {
 		MainActivityDelegate.setTheme(this, true);
 		super.onCreate(savedInstanceState);
+		installInputHooks();
 		initCarActivity(this);
 		FermataMediaServiceConnection s = service;
 
@@ -136,7 +142,82 @@ public class MainCarActivity extends CarActivity implements FermataActivity {
 	@Override
 	public void onResume() {
 		super.onResume();
+		installInputHooks();
 		getActivityDelegate().onSuccess(MainActivityDelegate::onActivityResume);
+	}
+
+	private boolean inPredictive;
+
+	@Override
+	public void onBackPressed() {
+		KnobLog.note("back path=onBackPressed");
+		if (TvTransport.onBack("onBackPressed")) return;
+		if (inPredictive) return;
+		super.onBackPressed();
+	}
+
+	private void onPredictiveBack() {
+		if (inPredictive) return;
+		inPredictive = true;
+		try {
+			KnobLog.note("back path=OnBackInvoked");
+			if (TvTransport.onBack("OnBackInvoked")) return;
+			MainActivityDelegate d = delegate.peek();
+			if (d != null) d.onBackPressed();
+			else super.onBackPressed();
+		} finally {
+			inPredictive = false;
+		}
+	}
+
+	private void installInputHooks() {
+		if (inputHooks) return;
+		try {
+			Window w = getWindow();
+			if (w == null) {
+				KnobLog.note("car window null");
+				return;
+			}
+			Window.Callback cb = w.getCallback();
+			if ((cb != null) && !(cb instanceof InputTap)) w.setCallback(new InputTap(cb));
+			if (Build.VERSION.SDK_INT >= 33) {
+				w.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+						OnBackInvokedDispatcher.PRIORITY_OVERLAY, this::onPredictiveBack);
+				KnobLog.note("back callback PRIORITY_OVERLAY");
+			}
+			inputHooks = true;
+			KnobLog.note("car input hooks installed");
+		} catch (RuntimeException err) {
+			Log.e(err, "car input hooks");
+			KnobLog.note("car input hooks failed " + err);
+		}
+	}
+
+	private final class InputTap extends WindowCallbackWrapper {
+		InputTap(Window.Callback wrapped) {
+			super(wrapped);
+		}
+
+		@Override
+		public boolean dispatchKeyEvent(KeyEvent event) {
+			KnobLog.logKey(null, event);
+			KnobLog.note("path=window-key code=" + event.getKeyCode() + " action=" + event.getAction() +
+					" source=0x" + Integer.toHexString(event.getSource()));
+			if (TvTransport.onKey(event, "window")) return true;
+			return super.dispatchKeyEvent(event);
+		}
+
+		@Override
+		public boolean dispatchGenericMotionEvent(MotionEvent event) {
+			KnobLog.logMotion(null, event);
+			if (event.getAction() == MotionEvent.ACTION_SCROLL) {
+				KnobLog.note("path=window-motion scroll=" + event.getAxisValue(MotionEvent.AXIS_SCROLL) +
+						" vscroll=" + event.getAxisValue(MotionEvent.AXIS_VSCROLL) +
+						" source=0x" + Integer.toHexString(event.getSource()));
+			}
+			if (TvTransport.onMotion(event, "window")) return true;
+			return super.dispatchGenericMotionEvent(event);
+		}
 	}
 
 	@Override

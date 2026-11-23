@@ -115,6 +115,14 @@ public class MainActivity extends SplitCompatActivityBase
 			}
 		});
 		super.onCreate(savedInstanceState);
+		YoutubeShare.remember(this, getIntent());
+	}
+
+	@Override
+	protected void onNewIntent(Intent intent) {
+		super.onNewIntent(intent);
+		setIntent(intent);
+		YoutubeShare.remember(this, intent);
 	}
 
 	@Override
