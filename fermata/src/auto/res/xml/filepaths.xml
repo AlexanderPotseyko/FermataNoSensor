@@ -1,4 +1,10 @@
 <paths>
+    <files-path
+        name="files"
+        path="." />
+    <external-files-path
+        name="extfiles"
+        path="." />
     <cache-path
         name="updates"
         path="updates/" />

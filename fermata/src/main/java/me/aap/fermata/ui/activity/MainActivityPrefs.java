@@ -1,6 +1,7 @@
 package me.aap.fermata.ui.activity;
 
 import static me.aap.fermata.BuildConfig.AUTO;
+import static me.aap.fermata.BuildConfig.YOUTUBE_ONLY;
 
 import androidx.annotation.Nullable;
 
@@ -51,8 +52,21 @@ public interface MainActivityPrefs
 	Pref<DoubleSupplier> L_SPLIT_PERCENT = Pref.f("L_SPLIT_PERCENT", 0.4f);
 	Pref<DoubleSupplier> P_SPLIT_PERCENT_SUB = Pref.f("P_SPLIT_PERCENT_SUB", 0.5f);
 	Pref<DoubleSupplier> L_SPLIT_PERCENT_SUB = Pref.f("L_SPLIT_PERCENT_SUB", 0.5f);
-	Pref<Supplier<String>> SHOW_ADDON_ON_START = Pref.s("SHOW_ADDON_ON_START", (String) null);
+	Pref<Supplier<String>> SHOW_ADDON_ON_START = Pref.s("SHOW_ADDON_ON_START",
+			YOUTUBE_ONLY ? "me.aap.fermata.addon.web.yt.YoutubeAddon" : null);
 	Pref<BooleanSupplier> CHECK_UPDATES = Pref.b("CHECK_UPDATES", true);
+	Pref<BooleanSupplier> KNOB_LOG = Pref.b("KNOB_LOG", true);
+	int YT_MODE_WEB = 0;
+	int YT_MODE_TV = 1;
+	int YT_KNOB_VERTICAL = 0;
+	int YT_KNOB_HORIZONTAL = 1;
+	// Web is the default. TV mode is an experiment and is off until chosen.
+	Pref<IntSupplier> YT_UI_MODE = Pref.i("YT_UI_MODE", YT_MODE_WEB);
+	Pref<IntSupplier> YT_KNOB_AXIS = Pref.i("YT_KNOB_AXIS", YT_KNOB_VERTICAL);
+	// Off: clockwise rotation moves to the next item. On: the other way.
+	Pref<BooleanSupplier> YT_KNOB_INVERT = Pref.b("YT_KNOB_INVERT", false);
+	// Off: the car screen has no Fermata bar. Settings stay on the phone.
+	Pref<BooleanSupplier> YT_CAR_PANEL = Pref.b("YT_CAR_PANEL", false);
 	Pref<LongSupplier> CHECK_UPDATES_STAMP = Pref.l("CHECK_UPDATES_STAMP", 0);
 	Pref<BooleanSupplier> SYS_BARS_ON_VIDEO_TOUCH = Pref.b("SYS_BARS_ON_VIDEO_TOUCH", false);
 	Pref<BooleanSupplier> LANDSCAPE_VIDEO = Pref.b("LANDSCAPE_VIDEO", false);

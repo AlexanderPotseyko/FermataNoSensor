@@ -1,6 +1,7 @@
 package me.aap.fermata.addon.web.yt;
 
 import me.aap.fermata.addon.web.FermataJsInterface;
+import me.aap.fermata.ui.activity.KnobLog;
 import me.aap.fermata.addon.web.FermataWebView;
 import me.aap.utils.async.Completable;
 import me.aap.utils.async.Promise;
@@ -17,6 +18,8 @@ public class YoutubeJsInterface extends FermataJsInterface {
 	public static final int JS_VIDEO_QUALITIES = JS_LAST + 5;
 	public static final int JS_FULL_SCREEN = JS_LAST + 6;
 	public static final int JS_VIDEO_PROGRESS = JS_LAST + 7;
+	public static final int JS_KNOB_EDGE = JS_LAST + 8;
+	public static final int JS_TV_DIAG = JS_LAST + 9;
 	private final YoutubeMediaEngine engine;
 	private Promise<String> result;
 
@@ -61,6 +64,13 @@ public class YoutubeJsInterface extends FermataJsInterface {
 				break;
 			case JS_FULL_SCREEN:
 				((YoutubeWebView) getWebView()).videoFullScreen = "VIDEO".equals(data);
+				break;
+			case JS_KNOB_EDGE:
+				if ("left".equals(data)) getYoutubeWebView().focusNavBar();
+				break;
+			case JS_TV_DIAG:
+				if ((data != null) && data.startsWith("state ")) getYoutubeWebView().onTvState(data);
+				else KnobLog.note(data);
 				break;
 			default:
 				super.handleEvent(event, data);

@@ -206,6 +206,9 @@ public class NavBarMediator extends PrefNavBarMediator
 	@Nullable
 	@Override
 	public View focusSearch(NavBarView nb, View focused, int direction) {
+		View page = me.aap.fermata.ui.activity.CarInputSink.findView(nb.getRootView());
+		if ((page != null) && (direction == FOCUS_UP) && nb.isBottom()) return page;
+		if ((page != null) && (direction == FOCUS_RIGHT) && nb.isLeft()) return page;
 		if (direction == FOCUS_UP) {
 			if (!nb.isBottom()) return null;
 			Context ctx = nb.getContext();
@@ -321,9 +324,15 @@ public class NavBarMediator extends PrefNavBarMediator
 		Set<String> names = newLinkedHashSet(BuildConfig.ADDONS.length + 4);
 		String[] pref = getPreferenceStore(nb).getStringArrayPref(getPref(nb));
 		CollectionUtils.addAll(names, pref);
-		names.add("folders");
-		names.add("favorites");
-		names.add("playlists");
+		if (BuildConfig.YOUTUBE_ONLY) {
+			names.remove("folders");
+			names.remove("favorites");
+			names.remove("playlists");
+		} else {
+			names.add("folders");
+			names.add("favorites");
+			names.add("playlists");
+		}
 		for (AddonInfo ai : BuildConfig.ADDONS) {
 			FermataAddon a = amgr.getAddon(ai.className);
 			if (a instanceof FermataFragmentAddon) names.add(ai.className);

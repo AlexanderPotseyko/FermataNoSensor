@@ -69,7 +69,8 @@ import me.aap.utils.ui.UiUtils;
  * @author Andrey Pavlenko
  */
 public class FermataMediaService extends MediaBrowserServiceCompat {
-	public static final String ACTION_MEDIA_SERVICE = "me.aap.fermata.action.MediaService";
+	public static final String ACTION_MEDIA_SERVICE =
+			"by.potseyko.fermatanosensor.action.MediaService";
 	public static final String INTENT_ATTR_NOTIF_COLOR = "me.aap.fermata.notif.color";
 	public static final String DEFAULT_NOTIF_COLOR = "#3D2562";
 	private static final String CONTENT_STYLE_SUPPORTED =

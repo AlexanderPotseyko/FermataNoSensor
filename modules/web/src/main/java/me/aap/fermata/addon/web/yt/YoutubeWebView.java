@@ -8,13 +8,22 @@ import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_VIDEO_FOUND;
 import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_VIDEO_PAUSED;
 import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_VIDEO_PLAYING;
 import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_VIDEO_PROGRESS;
+import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_TV_DIAG;
 import static me.aap.fermata.addon.web.yt.YoutubeJsInterface.JS_VIDEO_QUALITIES;
 
 import android.content.Context;
+import android.net.Uri;
 import android.os.SystemClock;
 import android.support.v4.media.session.PlaybackStateCompat;
 import android.util.AttributeSet;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.webkit.CookieManager;
+import android.webkit.WebSettings;
+import android.widget.EditText;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -28,17 +37,61 @@ import me.aap.fermata.BuildConfig;
 import me.aap.fermata.addon.web.FermataChromeClient;
 import me.aap.fermata.addon.web.FermataJsInterface;
 import me.aap.fermata.addon.web.FermataWebView;
+import me.aap.fermata.addon.web.WebBrowserAddon;
 import me.aap.fermata.media.service.MediaSessionCallback;
+import me.aap.fermata.ui.activity.CarInputSink;
+import me.aap.fermata.ui.activity.KnobLog;
+import me.aap.fermata.ui.activity.KnobMap;
 import me.aap.fermata.ui.activity.MainActivityDelegate;
+import me.aap.fermata.ui.activity.MainActivityPrefs;
+import me.aap.fermata.ui.activity.TvTransport;
+import me.aap.utils.ui.view.NavBarView;
 import me.aap.utils.async.FutureSupplier;
 import me.aap.utils.async.Promise;
 import me.aap.utils.log.Log;
 import me.aap.utils.pref.PreferenceStore;
+import me.aap.utils.ui.UiUtils;
 
 /**
  * @author Andrey Pavlenko
  */
-public class YoutubeWebView extends FermataWebView {
+public class YoutubeWebView extends FermataWebView implements CarInputSink {
+	// VacuumTube's short Cobalt string. It was the one that kept youtube.com/tv on the leanback UI.
+	private static final String TV_UA =
+			"Mozilla/5.0 (PS4; Leanback Shell) Cobalt/26.lts.0-qa; compatible;";
+	static final String TV_HOME = "https://www.youtube.com/tv";
+	static final String WEB_HOME = "https://m.youtube.com";
+	private boolean tvFallback;
+	private boolean playerOpen;
+	private boolean playerPaused;
+	private String tvHref;
+	private int pendingSeekSec;
+	private long lastBackUptime;
+	private android.window.OnBackInvokedCallback tvBackCallback;
+	private boolean injecting;
+	private long lastMotionAt;
+	private int lastTvKey;
+	private boolean mainFrameFailed;
+	private boolean allowFocusLeave;
+	private int desktopRedirects;
+	private int tvLoadEpoch;
+	private boolean tvLoadInside;
+	private TvHost tvHost;
+	private ViewTreeObserver.OnGlobalFocusChangeListener focusLogger;
+
+	interface TvHost {
+		boolean isOpen();
+
+		void showMenu();
+
+		void closeMenu();
+
+		void onLoadStart();
+
+		void onLoaded();
+
+		void onLoadError(String description);
+	}
 	private static final String CLEAR_HIGHEST_VIDEO_QUALITY_JS =
 			"function clearFermataQ() {\n" +
 					"  if (!window.__fermataQ) return;\n" +
@@ -86,21 +139,191 @@ public class YoutubeWebView extends FermataWebView {
 	}
 
 	@Override
+	public void init(WebBrowserAddon addon, me.aap.fermata.addon.web.FermataWebClient webClient,
+									 FermataChromeClient chromeClient) {
+		super.init(addon, webClient, chromeClient);
+		MainActivityPrefs.get().addBroadcastListener(this);
+		prepareMode();
+		focusLogger = (oldFocus, newFocus) -> {
+			if (!tvActive()) return;
+			KnobLog.note("focus " + viewName(oldFocus) + " -> " + viewName(newFocus));
+			if (newFocus == this) allowFocusLeave = false;
+			if (allowFocusLeave || ((tvHost != null) && tvHost.isOpen()) || inOverlay(newFocus)) return;
+			if (newFocus == null) {
+				if (hasWindowFocus()) post(this::requestFocus);
+				return;
+			}
+			if (!isOurFocus(newFocus)) post(this::requestFocus);
+		};
+		addFocusLogger();
+		registerTvBack();
+	}
+
+	void setTvHost(TvHost host) {
+		tvHost = host;
+	}
+
+	void releaseTv() {
+		TvTransport.set(null);
+	}
+
+	@Override
+	protected void onAttachedToWindow() {
+		super.onAttachedToWindow();
+		addFocusLogger();
+		registerTvBack();
+	}
+
+	private void addFocusLogger() {
+		if ((focusLogger == null) || !isAttachedToWindow()) return;
+		ViewTreeObserver obs = getRootView().getViewTreeObserver();
+		obs.removeOnGlobalFocusChangeListener(focusLogger);
+		obs.addOnGlobalFocusChangeListener(focusLogger);
+	}
+
+	@Override
+	protected void onDetachedFromWindow() {
+		View root = getRootView();
+		if ((root != null) && (focusLogger != null)) {
+			root.getViewTreeObserver().removeOnGlobalFocusChangeListener(focusLogger);
+		}
+		if ((android.os.Build.VERSION.SDK_INT >= 33) && (tvBackCallback != null)) {
+			android.window.OnBackInvokedDispatcher dispatcher = findOnBackInvokedDispatcher();
+			if (dispatcher != null) dispatcher.unregisterOnBackInvokedCallback(tvBackCallback);
+			tvBackCallback = null;
+		}
+		super.onDetachedFromWindow();
+	}
+
+	private void registerTvBack() {
+		if ((android.os.Build.VERSION.SDK_INT < 33) || (tvBackCallback != null) || !isAttachedToWindow())
+			return;
+		android.window.OnBackInvokedDispatcher dispatcher = findOnBackInvokedDispatcher();
+		if (dispatcher == null) return;
+		tvBackCallback = () -> onBackPath("webview-back");
+		dispatcher.registerOnBackInvokedCallback(
+				android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY, tvBackCallback);
+		KnobLog.note("back callback webview PRIORITY_OVERLAY");
+	}
+
+	@Override
+	public android.view.inputmethod.InputConnection onCreateInputConnection(
+			android.view.inputmethod.EditorInfo outAttrs) {
+		android.view.inputmethod.InputConnection base = super.onCreateInputConnection(outAttrs);
+		if ((base == null) || !tvActive()) return base;
+		return new android.view.inputmethod.InputConnectionWrapper(base, true) {
+			@Override
+			public boolean sendKeyEvent(KeyEvent event) {
+				KnobLog.note("path=input " + describeKey(event, true, "input"));
+				if (onTvKey(event, "input")) return true;
+				return super.sendKeyEvent(event);
+			}
+		};
+	}
+
+	void allowFocusLeave() {
+		allowFocusLeave = true;
+	}
+
+	static boolean tvSelected() {
+		return MainActivityPrefs.get().getIntPref(MainActivityPrefs.YT_UI_MODE) ==
+				MainActivityPrefs.YT_MODE_TV;
+	}
+
+	static String homeUrl() {
+		return tvSelected() ? TV_HOME : WEB_HOME;
+	}
+
+	public boolean tvActive() {
+		return tvSelected() && !tvFallback;
+	}
+
+	private void prepareMode() {
+		WebSettings settings = getSettings();
+		if (tvActive()) settings.setUserAgentString(TV_UA);
+		else settings.setUserAgentString(null);
+		KnobLog.session(tvActive() ? "tv" : (tvFallback ? "web-fallback" : "web"));
+		TvTransport.set(tvActive() ? new TvTransport.Target() {
+			@Override
+			public boolean play() {
+				return tvPlay(true);
+			}
+
+			@Override
+			public boolean pause() {
+				return tvPlay(false);
+			}
+
+			@Override
+			public boolean toggle() {
+				return tvToggle();
+			}
+
+			@Override
+			public boolean seek(int seconds) {
+				return tvSeek(seconds);
+			}
+
+			@Override
+			public boolean onKey(KeyEvent event, String path) {
+				return onTvKey(event, path);
+			}
+
+			@Override
+			public boolean onMotion(MotionEvent event, String path) {
+				return consumeTvMotion(event);
+			}
+
+			@Override
+			public boolean onBack(String path) {
+				return onBackPath(path);
+			}
+		} : null);
+	}
+
+	@Override
 	public void onPreferenceChanged(PreferenceStore store, List<PreferenceStore.Pref<?>> prefs) {
 		super.onPreferenceChanged(store, prefs);
+		if (prefs.contains(MainActivityPrefs.YT_UI_MODE)) {
+			tvFallback = false;
+			prepareMode();
+			if (isAttachedToWindow()) loadUrl(homeUrl());
+		}
 
-		if (getAddon().autoHighestQualityChanged(prefs)) {
+		if (!tvActive() && (getAddon() != null) && getAddon().autoHighestQualityChanged(prefs)) {
 			if (getAddon().autoHighestQuality()) setHighestVideoQuality();
 			else clearHighestVideoQuality();
 		}
 
-		if (YoutubeSponsorBlock.isPreferenceChanged(prefs)) injectSponsorBlock();
+		if (!tvActive() && YoutubeSponsorBlock.isPreferenceChanged(prefs)) injectSponsorBlock();
 	}
 
 	@Override
 	public void loadUrl(@NonNull String url) {
 		Log.d("Loading URL: " + url);
-		super.loadUrl(url);
+		boolean show = tvActive() && (tvHost != null) && isTvDestination(url);
+		if (show) beginTvLoad();
+		tvLoadInside = show;
+		try {
+			super.loadUrl(url);
+		} finally {
+			tvLoadInside = false;
+		}
+	}
+
+	void reloadTv() {
+		desktopRedirects = 0;
+		mainFrameFailed = false;
+		loadUrl(TV_HOME);
+	}
+
+	private static boolean isTvDestination(String url) {
+		return (url != null) && (url.startsWith(TV_HOME) || url.contains("youtube.com/tv"));
+	}
+
+	private void beginTvLoad() {
+		tvLoadEpoch++;
+		tvHost.onLoadStart();
 	}
 
 	@Override
@@ -114,7 +337,11 @@ public class YoutubeWebView extends FermataWebView {
 	public void onActivityEvent(MainActivityDelegate a, long e) {
 		// The page is gone with its activity (e.g. Fermata Auto exited from Android Auto), and nothing
 		// can continue its playback. Switching to another section only detaches it until it's shown again.
-		if ((e == ACTIVITY_DESTROY) && (js != null)) js.pageRemoved();
+		if (e == ACTIVITY_DESTROY) {
+			MainActivityPrefs.get().removeBroadcastListener(this);
+			TvTransport.set(null);
+			if (js != null) js.pageRemoved();
+		}
 		super.onActivityEvent(a, e);
 	}
 
@@ -184,6 +411,8 @@ public class YoutubeWebView extends FermataWebView {
 
 	@Override
 	protected void urlChanged(String url) {
+		KnobLog.note("url " + url);
+		notePlayer(url, false);
 		if (YoutubeUrls.isVideoUrl(url)) {
 			// Another video opened before the reopened one started
 			if ((reopening != null) &&
@@ -198,11 +427,699 @@ public class YoutubeWebView extends FermataWebView {
 
 	@Override
 	protected void pageLoaded(String uri) {
+		if (mainFrameFailed) {
+			mainFrameFailed = false;
+			return;
+		}
+		if (leaveTv(uri, "load")) return;
+		if (tvActive()) {
+			desktopRedirects = 0;
+			installTvDiag();
+			notePlayer(uri, true);
+			if ((tvHost != null) && !tvLoadInside) {
+				int epoch = tvLoadEpoch;
+				post(() -> {
+					if ((epoch != tvLoadEpoch) || (tvHost == null)) return;
+					tvHost.onLoaded();
+					requestFocus();
+				});
+			}
+			allowFocusLeave = false;
+			CookieManager.getInstance().flush();
+			return;
+		}
 		attachListeners();
 		injectSponsorBlock();
 		addFocusHighlight();
+		installKnobJs();
 		CookieManager.getInstance().flush();
 	}
+
+	void onTvLoadError(String description) {
+		if (!tvSelected() || tvFallback) return;
+		mainFrameFailed = true;
+		KnobLog.note("tv load error: " + description + " url=" + getUrl());
+		if (tvHost != null) tvHost.onLoadError(description);
+	}
+
+	private boolean leaveTv(String url, String why) {
+		if (!tvSelected() || tvFallback || tvUrlOk(url)) return false;
+		if (desktopRedirects < 3) {
+			desktopRedirects++;
+			KnobLog.note("tv reload /tv (" + why + " #" + desktopRedirects + "): " + url);
+			post(() -> loadUrl(TV_HOME));
+			return true;
+		}
+		tvFallback = true;
+		KnobLog.note("tv fallback (" + why + "): " + url);
+		prepareMode();
+		Context ctx = getContext();
+		UiUtils.showInfo(ctx, ctx.getString(me.aap.fermata.R.string.yt_tv_fallback));
+		post(() -> loadUrl(WEB_HOME));
+		return true;
+	}
+
+	static boolean tvUrlOk(String url) {
+		if ((url == null) || url.isEmpty() || url.startsWith("about:blank")) return true;
+		Uri uri = Uri.parse(url);
+		String host = uri.getHost();
+		if (host == null) return true;
+		host = host.toLowerCase(java.util.Locale.US);
+		if (host.equals("accounts.google.com") || host.equals("google.com") || host.endsWith(".google.com"))
+			return true;
+		if (host.endsWith("gstatic.com") || host.endsWith("googleapis.com") || host.endsWith("ggpht.com"))
+			return true;
+		if (host.equals("yt.be") || host.equals("youtu.be")) return true;
+		if (host.startsWith("consent.")) return true;
+		if (host.endsWith("youtube.com") && !host.endsWith("tv.youtube.com")) {
+			if (host.startsWith("m.")) return false;
+			String path = uri.getPath();
+			if (path == null) return false;
+			return path.equals("/tv") || path.startsWith("/tv/") || path.startsWith("/activate") ||
+					path.startsWith("/signin");
+		}
+		return false;
+	}
+
+	private boolean atTvRoot() {
+		String url = (tvHref != null) ? tvHref : getUrl();
+		if ((url == null) || !tvUrlOk(url)) return false;
+		Uri uri = Uri.parse(url);
+		String path = uri.getPath();
+		if ((path == null) || !(path.equals("/tv") || path.startsWith("/tv/"))) return false;
+		String fragment = uri.getFragment();
+		return (fragment == null) || fragment.isEmpty() || fragment.equals("/") || fragment.equals("/surface");
+	}
+
+	static boolean holdsFocus(KeyEvent event) {
+		return isTvInput(event.getKeyCode());
+	}
+
+	static String describeKey(KeyEvent event, boolean consumed, String by) {
+		return "key " + KeyEvent.keyCodeToString(event.getKeyCode()) +
+				" action=" + event.getAction() + " dev=" + event.getDeviceId() +
+				" source=0x" + Integer.toHexString(event.getSource()) +
+				" repeat=" + event.getRepeatCount() +
+				" consumed=" + consumed + " by=" + by;
+	}
+
+	private void sendKey(int code) {
+		if (!hasFocus()) requestFocus();
+		long time = SystemClock.uptimeMillis();
+		injecting = true;
+		try {
+			super.dispatchKeyEvent(new KeyEvent(time, time, KeyEvent.ACTION_DOWN, code, 0));
+			super.dispatchKeyEvent(new KeyEvent(time, time, KeyEvent.ACTION_UP, code, 0));
+		} finally {
+			injecting = false;
+		}
+	}
+
+	boolean menuOpen() {
+		return (tvHost != null) && tvHost.isOpen();
+	}
+
+	private boolean lastTvHandled;
+
+	private boolean onTvKey(KeyEvent event, String path) {
+		int code = event.getKeyCode();
+		KnobLog.note("path=" + path + " " + describeKey(event, true, path));
+		int stamp = code ^ (event.getAction() << 16) ^ (int) event.getEventTime();
+		if (stamp == lastTvKey) return lastTvHandled;
+		lastTvKey = stamp;
+		return lastTvHandled = handleTvKey(event, code);
+	}
+
+	private boolean handleTvKey(KeyEvent event, int code) {
+		if ((tvHost != null) && tvHost.isOpen()) {
+			if (code == KeyEvent.KEYCODE_BACK) {
+				if (event.getAction() == KeyEvent.ACTION_DOWN) tvHost.closeMenu();
+				return true;
+			}
+			KnobMap.Move menuRot = knobRotation(code, event.getSource(), 0f);
+			if (menuRot != KnobMap.Move.NONE) {
+				if (event.getAction() == KeyEvent.ACTION_DOWN) applyRotation(menuRot);
+				return true;
+			}
+			return false;
+		}
+		if (isMediaKey(code)) return onMediaKey(event);
+		if (!isKnobKey(code) && (code != KeyEvent.KEYCODE_BACK)) return false;
+		if (getRootView().findFocus() instanceof EditText) return false;
+		if (code == KeyEvent.KEYCODE_BACK) return onBackPath("key");
+		KnobMap.Move rot = knobRotation(code, event.getSource(), 0f);
+		if (rot != KnobMap.Move.NONE) {
+			if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+			applyRotation(rot);
+			KnobLog.note("rotate " + rot + " from " + KeyEvent.keyCodeToString(code));
+			return true;
+		}
+		if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+		switch (code) {
+			case KeyEvent.KEYCODE_DPAD_DOWN -> sendKey(KeyEvent.KEYCODE_DPAD_DOWN);
+			case KeyEvent.KEYCODE_DPAD_UP -> sendKey(KeyEvent.KEYCODE_DPAD_UP);
+			case KeyEvent.KEYCODE_DPAD_LEFT -> sendKey(KeyEvent.KEYCODE_DPAD_LEFT);
+			case KeyEvent.KEYCODE_DPAD_RIGHT -> sendKey(KeyEvent.KEYCODE_DPAD_RIGHT);
+			case KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+				if (playerOpen) tvToggle();
+				else sendKey(KeyEvent.KEYCODE_ENTER);
+			}
+			default -> {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private boolean onBackPath(String path) {
+		KnobLog.note("back path=" + path + " player=" + (playerOpen ? 1 : 0) + " href=" + tvHref);
+		if (!tvActive()) return false;
+		long now = SystemClock.uptimeMillis();
+		if (now - lastBackUptime < 450) return true;
+		lastBackUptime = now;
+		if ((tvHost != null) && tvHost.isOpen()) {
+			tvHost.closeMenu();
+			return true;
+		}
+		if (playerOpen || ((tvHref != null) && tvHref.contains("watch"))) {
+			leavePlayer(path);
+			return true;
+		}
+		if (!atTvRoot()) {
+			KnobLog.note("back " + path + " history");
+			evaluateJavascript("history.back()", null);
+			return true;
+		}
+		if (tvHost != null) tvHost.showMenu();
+		else evaluateJavascript("history.back()", null);
+		return true;
+	}
+
+	private void leavePlayer(String path) {
+		KnobLog.note("back " + path + " leave player");
+		evaluateJavascript("history.back()", null);
+		postDelayed(() -> {
+			if (!playerOpen) {
+				KnobLog.note("back player closed");
+				return;
+			}
+			KnobLog.note("back player still open, load /tv");
+			loadUrl(TV_HOME);
+		}, 800);
+	}
+
+	private KnobMap.Move knobRotation(int keyCode, int source, float scroll) {
+		boolean invert = MainActivityPrefs.get().getBooleanPref(MainActivityPrefs.YT_KNOB_INVERT);
+		boolean horizontal = MainActivityPrefs.get().getIntPref(MainActivityPrefs.YT_KNOB_AXIS) ==
+				MainActivityPrefs.YT_KNOB_HORIZONTAL;
+		return KnobMap.rotation(keyCode, source, scroll, invert, horizontal);
+	}
+
+	private void applyRotation(KnobMap.Move rot) {
+		if ((tvHost != null) && tvHost.isOpen()) {
+			moveMenuFocus((rot == KnobMap.Move.DOWN) || (rot == KnobMap.Move.RIGHT));
+			return;
+		}
+		if (playerOpen) {
+			tvSeek(((rot == KnobMap.Move.DOWN) || (rot == KnobMap.Move.RIGHT)) ? 10 : -10);
+			return;
+		}
+		int code = KnobMap.keyCode(rot);
+		if (code != 0) sendKey(code);
+	}
+
+	private boolean onMediaKey(KeyEvent event) {
+		if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+		return switch (event.getKeyCode()) {
+			case KeyEvent.KEYCODE_MEDIA_PLAY -> tvPlay(true);
+			case KeyEvent.KEYCODE_MEDIA_PAUSE -> tvPlay(false);
+			case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> tvToggle();
+			case KeyEvent.KEYCODE_MEDIA_NEXT -> tvSeek(10);
+			case KeyEvent.KEYCODE_MEDIA_PREVIOUS -> tvSeek(-10);
+			default -> false;
+		};
+	}
+
+	private boolean tvToggle() {
+		evaluateJavascript(
+				"(function(){var v=document.querySelector('video');if(!v)return;if(v.paused)v.play();else v.pause();})()",
+				null);
+		return true;
+	}
+
+	private boolean tvPlay(boolean play) {
+		evaluateJavascript(
+				"(function(){var v=document.querySelector('video');if(!v)return;if(" + play +
+						")v.play();else v.pause();})()",
+				null);
+		return true;
+	}
+
+	private boolean tvSeek(int seconds) {
+		evaluateJavascript(
+				"(function(){var v=document.querySelector('video');if(!v)return;var n=Math.max(0,(v.currentTime||0)+(" +
+						seconds + "));try{v.currentTime=n;}catch(e){}})()",
+				null);
+		KnobLog.note("seek " + seconds);
+		return true;
+	}
+
+	void onTvState(String data) {
+		long t0 = SystemClock.uptimeMillis();
+		boolean open = (data != null) && data.contains("player=1");
+		boolean paused = (data == null) || data.contains("paused=1");
+		if (data != null) {
+			int href = data.indexOf(" http");
+			if (href > 0) tvHref = data.substring(href + 1).trim();
+		}
+		if (open && (pendingSeekSec > 0)) {
+			int sec = pendingSeekSec;
+			pendingSeekSec = 0;
+			tvSeekTo(sec);
+		}
+		if ((open == playerOpen) && (paused == playerPaused)) return;
+		playerOpen = open;
+		playerPaused = paused;
+		KnobLog.note("player " + (open ? "open" : "closed") + " paused=" + (paused ? 1 : 0) + " " + data);
+		TvTransport.playback(open, paused);
+		long dt = SystemClock.uptimeMillis() - t0;
+		if (dt > 200) Log.w("main thread ", dt, " ms onTvState");
+	}
+
+	void openTvVideo(Video video) {
+		String id = YoutubeUrls.videoId(video.url());
+		pendingSeekSec = (int) (video.position() / 1000L);
+		if (id.isEmpty()) {
+			loadUrl(video.url());
+			return;
+		}
+		loadUrl(TV_HOME + "#/watch?v=" + id);
+	}
+
+	private void tvSeekTo(int sec) {
+		evaluateJavascript(
+				"(function(){var v=document.querySelector('video');if(!v)return;try{v.currentTime=" + sec +
+						";}catch(e){}})()",
+				null);
+		KnobLog.note("seek to " + sec);
+	}
+
+	private void notePlayer(String url, boolean log) {
+		boolean open = (url != null) && (url.contains("watch"));
+		if (open == playerOpen) return;
+		playerOpen = open;
+		if (log) KnobLog.note("player " + (open ? "open" : "closed") + " url");
+	}
+
+	@Override
+	public boolean dispatchKeyEvent(KeyEvent event) {
+		if (injecting || !tvActive()) return super.dispatchKeyEvent(event);
+		boolean consumed = onTvKey(event, "webview");
+		String by = ((tvHost != null) && tvHost.isOpen()) ? "menu" : (consumed ? "tv" : "pass");
+		if (!consumed) consumed = super.dispatchKeyEvent(event);
+		KnobLog.note(describeKey(event, consumed, by));
+		if (menuOpen()) return consumed;
+		return consumed || holdsFocus(event);
+	}
+
+	@Override
+	public boolean dispatchGenericMotionEvent(MotionEvent event) {
+		if (tvActive() && consumeTvMotion(event)) return true;
+		return super.dispatchGenericMotionEvent(event);
+	}
+
+	boolean consumeTvMotion(MotionEvent event) {
+		if (!tvActive()) return false;
+		if ((event.getAction() != MotionEvent.ACTION_SCROLL) ||
+				!(event.isFromSource(android.view.InputDevice.SOURCE_ROTARY_ENCODER) ||
+						(event.getAxisValue(MotionEvent.AXIS_SCROLL) != 0f) ||
+						(event.getAxisValue(MotionEvent.AXIS_VSCROLL) != 0f))) return false;
+		float v = event.getAxisValue(MotionEvent.AXIS_SCROLL);
+		if (v == 0f) v = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+		if (v == 0f) return false;
+		if (event.getEventTime() == lastMotionAt) return true;
+		lastMotionAt = event.getEventTime();
+		KnobMap.Move rot = knobRotation(0, event.getSource(), v);
+		applyRotation(rot);
+		KnobLog.note("path=motion scroll=" + v + " mapped=" + rot + " source=0x" +
+				Integer.toHexString(event.getSource()));
+		return true;
+	}
+
+	private void moveMenuFocus(boolean forward) {
+		View focus = getRootView().findFocus();
+		if ((focus == null) || (focus == this)) {
+			if (tvHost != null) tvHost.showMenu();
+			return;
+		}
+		View next = focus.focusSearch(forward ? View.FOCUS_DOWN : View.FOCUS_UP);
+		if (next != null) next.requestFocus();
+		else {
+			allowFocusLeave = true;
+			focus.clearFocus();
+			KnobLog.note("focus released toward AA rail");
+		}
+	}
+
+	private static boolean isTvInput(int code) {
+		return isKnobKey(code) || isMediaKey(code) || (code == KeyEvent.KEYCODE_BACK) ||
+				(code == KeyEvent.KEYCODE_ESCAPE);
+	}
+
+	private static boolean isMediaKey(int code) {
+		return switch (code) {
+			case KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE,
+					KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_NEXT,
+					KeyEvent.KEYCODE_MEDIA_PREVIOUS -> true;
+			default -> false;
+		};
+	}
+
+	private boolean isOurFocus(View focus) {
+		for (View v = focus; v != null; v = (v.getParent() instanceof View p) ? p : null) {
+			if (v == this) return true;
+		}
+		return false;
+	}
+
+	private static boolean inOverlay(View focus) {
+		for (View v = focus; v != null; v = (v.getParent() instanceof View p) ? p : null) {
+			if (v instanceof YoutubeTvOverlay) return true;
+		}
+		return false;
+	}
+
+	private static String viewName(View view) {
+		if (view == null) return "none";
+		String id = "";
+		try {
+			if (view.getId() != View.NO_ID) id = "#" + view.getResources().getResourceEntryName(view.getId());
+		} catch (Exception ignore) {
+		}
+		return view.getClass().getSimpleName() + id;
+	}
+
+	@Override
+	protected void onKeyNavigation() {
+		if (tvActive()) return;
+		super.onKeyNavigation();
+	}
+
+	private void installTvDiag() {
+		evaluateJavascript(
+				"if (!window.__fermataTvDiag) {\n" +
+						"window.__fermataTvDiag = true;\n" +
+						"function fermataTvReport(v, why) {\n" +
+						"  " + JS_EVENT + "(" + JS_TV_DIAG + ", why + ' ready=' + v.readyState + ' t=' + Math.floor(v.currentTime) + ' paused=' + v.paused + ' ' + location.href);\n" +
+						"}\n" +
+						"function fermataTvScan() {\n" +
+						"  var vids = document.querySelectorAll('video');\n" +
+						"  for (var i = 0; i < vids.length; i++) {\n" +
+						"    var v = vids[i];\n" +
+						"    if (v.__ftv) continue;\n" +
+						"    v.__ftv = 1;\n" +
+						"    v.addEventListener('loadeddata', function() { fermataTvReport(this, 'loadeddata'); });\n" +
+						"    v.addEventListener('playing', function() { fermataTvReport(this, 'playing'); });\n" +
+						"    if (v.readyState > 0) fermataTvReport(v, 'ready');\n" +
+						"  }\n" +
+						"  setTimeout(fermataTvScan, 2000);\n" +
+						"}\n" +
+						"function fermataTvState() {\n" +
+						"  var h = location.hash || '';\n" +
+						"  var open = h.indexOf('watch') >= 0;\n" +
+						"  var v = document.querySelector('video');\n" +
+						"  if (!open && v) {\n" +
+						"    var r = v.getBoundingClientRect();\n" +
+						"    open = r.width > innerWidth * 0.55 && r.height > innerHeight * 0.45 && v.readyState > 0;\n" +
+						"  }\n" +
+						"  var skip = document.querySelector('ytlr-skip-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, button[aria-label*=\"Skip\"], button[aria-label*=\"Пропустить\"]');\n" +
+						"  if (skip && window.__ftvSkip !== skip) { window.__ftvSkip = skip; try { skip.focus(); } catch (e) {} }\n" +
+						"  var paused = !v || v.paused ? 1 : 0;\n" +
+						"  var sig = (open ? 1 : 0) + ':' + paused + ':' + location.href;\n" +
+						"  if (window.__ftvSig === sig) return;\n" +
+						"  window.__ftvSig = sig;\n" +
+						"  " + JS_EVENT + "(" + JS_TV_DIAG + ", 'state player=' + (open ? 1 : 0) + ' paused=' + paused + ' ' + location.href);\n" +
+						"}\n" +
+						"if (!window.__ftvState) {\n" +
+						"  window.__ftvState = 1;\n" +
+						"  window.addEventListener('hashchange', fermataTvState);\n" +
+						"  window.addEventListener('popstate', fermataTvState);\n" +
+						"}\n" +
+						"if (!window.__ftvTimer) window.__ftvTimer = setInterval(fermataTvState, 1000);\n" +
+						"setTimeout(function() {\n" +
+						"  var vids = document.querySelectorAll('video');\n" +
+						"  var live = false;\n" +
+						"  for (var i = 0; i < vids.length; i++) if (vids[i].readyState > 0) live = true;\n" +
+						"  if (!live) " + JS_EVENT + "(" + JS_TV_DIAG + ", 'video readyState=0 count=' + vids.length + ' ' + location.href);\n" +
+						"}, 8000);\n" +
+						"fermataTvScan();\n" +
+						"}\n",
+				null);
+	}
+
+	@Override
+	public boolean onCarKey(KeyEvent event) {
+		if (tvActive()) {
+			boolean consumed = onTvKey(event, "activity");
+			KnobLog.note(describeKey(event, consumed, "activity"));
+			return consumed;
+		}
+		int code = event.getKeyCode();
+		if (!isKnobKey(code)) return false;
+		if (getRootView().findFocus() instanceof EditText) return false;
+		if (event.getAction() != KeyEvent.ACTION_DOWN) return code != KeyEvent.KEYCODE_BACK || canGoBack();
+		onKeyNavigation();
+		installKnobJs();
+		switch (code) {
+			case KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_NAVIGATE_NEXT ->
+					knob("fermataKnob.move(1)");
+			case KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_NAVIGATE_PREVIOUS ->
+					knob("fermataKnob.move(-1)");
+			case KeyEvent.KEYCODE_DPAD_RIGHT -> knob("fermataKnob.horizontal(1)");
+			case KeyEvent.KEYCODE_DPAD_LEFT -> knob("fermataKnob.horizontal(-1)");
+			case KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER ->
+					evaluateJavascript("fermataKnob.click()", value -> {
+						if ((value != null) && value.contains("input")) showKeyboard(null);
+					});
+			case KeyEvent.KEYCODE_BACK -> {
+				if (canGoBack()) goBack();
+				else return false;
+			}
+			default -> {
+			}
+		}
+		return true;
+	}
+
+	@Override
+	public boolean onCarMotion(MotionEvent event) {
+		if (tvActive()) return consumeTvMotion(event);
+		if ((event.getAction() != MotionEvent.ACTION_SCROLL) ||
+				!(event.isFromSource(android.view.InputDevice.SOURCE_ROTARY_ENCODER) ||
+						(event.getAxisValue(MotionEvent.AXIS_SCROLL) != 0f))) return false;
+		if (getRootView().findFocus() instanceof EditText) return false;
+		float v = event.getAxisValue(MotionEvent.AXIS_SCROLL);
+		if (v == 0f) v = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+		if (v == 0f) return false;
+		onKeyNavigation();
+		installKnobJs();
+		knob(v > 0f ? "fermataKnob.move(1)" : "fermataKnob.move(-1)");
+		return true;
+	}
+
+	@Override
+	public View focusSearch(int direction) {
+		// Keep Android focus on the page. The car menu is the deliberate way out to the AA rail.
+		if (tvActive()) return this;
+		// Up, down and right stay on the page. Left can reach the nav bar.
+		if (direction == View.FOCUS_LEFT) return super.focusSearch(direction);
+		return this;
+	}
+
+	void knobSeek(int seconds) {
+		evaluateJavascript(
+				"(function(){var v=document.querySelector('video');var p=document.querySelector('#movie_player')||document.querySelector('.html5-video-player');var t=v?v.currentTime:0;var n=Math.max(0,t+(" +
+						seconds +
+						"));if(p&&typeof p.seekTo==='function')p.seekTo(n,true);else if(v)v.currentTime=n;})()",
+				null);
+	}
+
+	void knobToggle() {
+		evaluateJavascript(
+				"(function(){var v=document.querySelector('video');var p=document.querySelector('#movie_player')||document.querySelector('.html5-video-player');if(!v)return;if(v.paused){if(p&&p.playVideo)p.playVideo();else v.play();}else{if(p&&p.pauseVideo)p.pauseVideo();else v.pause();}})()",
+				null);
+	}
+
+	void focusNavBar() {
+		post(() -> {
+			MainActivityDelegate a = MainActivityDelegate.get(getContext());
+			if (a == null) return;
+			NavBarView nb = a.getNavBar();
+			if (nb != null) focusFirst(nb);
+		});
+	}
+
+	private void knob(String call) {
+		evaluateJavascript(call, null);
+	}
+
+	private void installKnobJs() {
+		int edge = YoutubeJsInterface.JS_KNOB_EDGE;
+		evaluateJavascript(KNOB_JS.replace("__EDGE__", Integer.toString(edge)), null);
+	}
+
+	private static boolean focusFirst(View v) {
+		if ((v.getVisibility() == View.VISIBLE) && v.isShown() && v.isFocusable() && v.requestFocus())
+			return true;
+		if (v instanceof ViewGroup group) {
+			for (int i = 0; i < group.getChildCount(); i++) {
+				if (focusFirst(group.getChildAt(i))) return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean isKnobKey(int code) {
+		return switch (code) {
+			case KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT,
+					KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+					KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_NAVIGATE_NEXT,
+					KeyEvent.KEYCODE_NAVIGATE_PREVIOUS, KeyEvent.KEYCODE_BACK -> true;
+			default -> false;
+		};
+	}
+
+	private static final String KNOB_JS = """
+			(function(){
+			  if (window.fermataKnob) return;
+			  var EDGE = __EDGE__;
+			  if (!document.getElementById('fermata-knob-style')) {
+			    var style = document.createElement('style');
+			    style.id = 'fermata-knob-style';
+			    style.textContent = '.fermata-knob{outline:4px solid #FFE600 !important;outline-offset:3px !important;border-radius:8px !important;box-shadow:0 0 0 2px #111 !important;}';
+			    (document.head || document.documentElement).appendChild(style);
+			  }
+			  function visible(e) {
+			    var r = e.getBoundingClientRect();
+			    if (r.width < 12 || r.height < 12) return false;
+			    if (r.bottom < 0 || r.top > window.innerHeight + 500) return false;
+			    var s = getComputedStyle(e);
+			    return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+			  }
+			  window.fermataKnob = {
+			    idx: -1,
+			    named: function(e) {
+			      var t = ((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('placeholder')||'')+' '+(e.getAttribute('title')||'')+' '+(e.innerText||'')+' '+(e.name||'')).replace(/\\s+/g,' ').trim();
+			      return t;
+			    },
+			    useful: function(e) {
+			      if (e.closest && e.closest('[aria-hidden="true"], ytd-ad-slot-renderer, .ytd-display-ad-renderer, #masthead-ad')) return false;
+			      if (e.getAttribute('tabindex') === '-1' && e.tagName !== 'INPUT') return false;
+			      var tag = e.tagName;
+			      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.isContentEditable) return true;
+			      var name = this.named(e);
+			      if (!name) return false;
+			      if (e.closest && e.closest('ytd-guide-entry-renderer') && name.length < 2) return false;
+			      return true;
+			    },
+			    skip: function() {
+			      var b = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, button[aria-label*="Skip"], button[aria-label*="Пропустить"]');
+			      return (b && visible(b)) ? b : null;
+			    },
+			    collect: function() {
+			      var nodes = document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[contenteditable="true"]');
+			      var out = [];
+			      for (var i = 0; i < nodes.length; i++) if (visible(nodes[i]) && this.useful(nodes[i])) out.push(nodes[i]);
+			      out.sort(function(a, b) {
+			        var ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+			        if (Math.abs(ra.top - rb.top) > 24) return ra.top - rb.top;
+			        return ra.left - rb.left;
+			      });
+			      return out;
+			    },
+			    searchIndex: function(items) {
+			      for (var i = 0; i < items.length; i++) {
+			        var e = items[i];
+			        var t = ((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('placeholder')||'')+' '+(e.getAttribute('title')||'')+' '+(e.name||'')).toLowerCase();
+			        if (t.indexOf('search') >= 0 || t.indexOf('поиск') >= 0) return i;
+			      }
+			      return -1;
+			    },
+			    apply: function(items) {
+			      var prev = document.querySelectorAll('.fermata-knob');
+			      for (var i = 0; i < prev.length; i++) prev[i].classList.remove('fermata-knob');
+			      var el = items[this.idx];
+			      if (!el) return;
+			      el.classList.add('fermata-knob');
+			      try { el.focus({preventScroll:true}); } catch (e) { try { el.focus(); } catch (e2) {} }
+			      try { el.scrollIntoView({block:'center', inline:'nearest'}); } catch (e) { el.scrollIntoView(false); }
+			    },
+			    move: function(dir) {
+			      var skip = this.skip();
+			      if (skip) {
+			        var prev = document.querySelectorAll('.fermata-knob');
+			        for (var i = 0; i < prev.length; i++) prev[i].classList.remove('fermata-knob');
+			        skip.classList.add('fermata-knob');
+			        try { skip.focus(); } catch (e) {}
+			        try { skip.scrollIntoView({block:'center'}); } catch (e) {}
+			        return;
+			      }
+			      var items = this.collect();
+			      if (!items.length) return;
+			      if (this.idx < 0 || !items[this.idx] || !items[this.idx].classList.contains('fermata-knob')) {
+			        var s = this.searchIndex(items);
+			        this.idx = (dir > 0 && s >= 0) ? s : (dir < 0 ? items.length - 1 : 0);
+			      } else {
+			        this.idx += (dir < 0 ? -1 : 1);
+			        if (this.idx < 0) this.idx = 0;
+			        if (this.idx >= items.length) this.idx = items.length - 1;
+			      }
+			      this.apply(items);
+			    },
+			    horizontal: function(dir) {
+			      var items = this.collect();
+			      if (!items.length) { if (dir < 0 && window.Fermata) Fermata.event(EDGE, 'left'); return; }
+			      if (this.idx < 0) this.idx = 0;
+			      var cur = items[this.idx] || items[0];
+			      var r = cur.getBoundingClientRect();
+			      var best = -1, bestD = 1e9;
+			      for (var i = 0; i < items.length; i++) {
+			        if (items[i] === cur) continue;
+			        var q = items[i].getBoundingClientRect();
+			        var dx = (q.left + q.width / 2) - (r.left + r.width / 2);
+			        if (dir < 0 && dx > -8) continue;
+			        if (dir > 0 && dx < 8) continue;
+			        var dy = Math.abs((q.top + q.height / 2) - (r.top + r.height / 2));
+			        if (dy > Math.max(80, r.height)) continue;
+			        var d = Math.abs(dx) + dy;
+			        if (d < bestD) { bestD = d; best = i; }
+			      }
+			      if (best < 0) {
+			        if (dir < 0 && window.Fermata) Fermata.event(EDGE, 'left');
+			        else this.move(dir);
+			        return;
+			      }
+			      this.idx = best;
+			      this.apply(items);
+			    },
+			    click: function() {
+			      var skip = this.skip();
+			      if (skip) { try { skip.click(); } catch (e) {} return 'ok'; }
+			      var items = this.collect();
+			      var el = items[this.idx];
+			      if (!el) return 'none';
+			      var tag = el.tagName;
+			      if (tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable) {
+			        try { el.focus(); } catch (e) {}
+			        try { el.click(); } catch (e) {}
+			        return 'input';
+			      }
+			      try { el.click(); } catch (e) {}
+			      return 'ok';
+			    }
+			  };
+			})()
+			""";
 
 	protected void submitForm() {
 		if (!me.aap.fermata.BuildConfig.AUTO) return;

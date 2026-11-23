@@ -1,6 +1,23 @@
 ## !!!Be aware of scam!!! The sites like https :// fermata-auto . com  are 100% scam. This app is free and opensource!
 
 
+## FermataNoSensor
+
+This repository is a modified fork of [Fermata](https://github.com/AndreyPavlenko/Fermata) by Andrey Pavlenko, released under the GNU GPL-3.0 (see `LICENSE`). The original author credit is unchanged.
+
+FermataNoSensor is a personal Android Auto build for YouTube only. It installs side by side with the original Fermata (`applicationId` `by.potseyko.fermatanosensor`, launcher name FermataNoSensor). IPTV, remote libraries, Cast, chat, mirror-mode launcher entries and the other unused add-ons are left out of this build. ExoPlayer, MediaPlayer and VLC, including the hardware-decoding setting, stay available.
+
+The release signing key is in `signing/` (see `signing/README.md`). It is committed on purpose so later personal builds update the same install. Do not publish this keystore.
+
+The launcher icon is the original mark on a red background with a yellow ring, including the adaptive icon and the Android Auto media icon.
+
+On the YouTube page the rotary knob (DPAD up/down or `SOURCE_ROTARY_ENCODER` scroll) moves a yellow focus outline and scrolls the item into view. The first downward step prefers the search field; center opens the car keyboard. Center clicks other items. Left at the left edge moves focus to the Fermata bar. In the full-screen player, center pauses or plays, rotation seeks by 10 seconds, and back leaves the player.
+
+Settings on the phone (Шайба) record those events to `knob.log` (about 1 MB) and can share or clear the file. Pointer drags are not stored. Each line includes the YouTube mode.
+
+Settings → YouTube → «Режим YouTube» defaults to «Веб-страница» and shows the selected value. «ТВ-режим (эксперимент)» loads `https://www.youtube.com/tv` with the VacuumTube Cobalt user agent. On the car screen the Fermata bar and the round back button are hidden unless «Панель в машине» is on (the back button stays hidden in TV mode). Back in the player leaves the player; back at the TV home opens Обновить / Главная YouTube / Закрыть. DHU `dpad rotate right` (key 2) moves down; «Инвертировать поворот шайбы» flips it. Knob events are in `Android/data/by.potseyko.fermatanosensor/files/knob.log`. The file is created at process start (`knob log init path=…`) and each line is flushed. Sharing a YouTube link to the app opens it in the car at the same position. A redirect to `youtube.com/?app=desktop` reloads `/tv` and falls back to the web page only after repeated failures. Web mode keeps the yellow focus outline.
+
+
 ## Fermata Media Player
 [![Download the latest APK](https://img.shields.io/github/v/release/AndreyPavlenko/Fermata?label=Download%20APK&logo=github&style=for-the-badge)](https://github.com/AndreyPavlenko/Fermata/releases/latest)
 

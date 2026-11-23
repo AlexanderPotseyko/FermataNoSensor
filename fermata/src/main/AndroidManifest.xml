@@ -81,10 +81,6 @@
         <meta-data
             android:name="com.google.android.gms.car.application.theme"
             android:resource="@style/AppTheme.Dark" />
-        <meta-data
-            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
-            android:value="me.aap.fermata.addon.cast.CastOptionsProvider" />
-
         <activity
             android:name="me.aap.fermata.ui.activity.MainActivity"
             android:configChanges="colorMode|keyboard|keyboardHidden|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
@@ -104,12 +100,35 @@
             </intent-filter>
 
             <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="youtu.be" />
+                <data android:scheme="http" android:host="youtu.be" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="www.youtube.com" android:pathPrefix="/watch" />
+                <data android:scheme="https" android:host="youtube.com" android:pathPrefix="/watch" />
+                <data android:scheme="https" android:host="m.youtube.com" android:pathPrefix="/watch" />
+            </intent-filter>
+
+            <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
                 <category android:name="android.intent.category.BROWSABLE" />
                 <category android:name="android.intent.category.DEFAULT" />
 
-                <data android:scheme="fermata" />
+                <data android:scheme="fermatanosensor" />
                 <data android:host="open" />
                 <data android:host="play" />
             </intent-filter>
@@ -859,7 +878,7 @@
                 <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
             </intent-filter>
             <intent-filter>
-                <action android:name="me.aap.fermata.action.MediaService" />
+                <action android:name="by.potseyko.fermatanosensor.action.MediaService" />
             </intent-filter>
         </service>
 

@@ -273,7 +273,7 @@ public class FermataWebView extends WebView
 
 	// The highlight is for key navigation (D-pad, rotary controller): add it on the first such input.
 	// It then stays for this view's lifetime, as the same controller keeps being used.
-	private void onKeyNavigation() {
+	protected void onKeyNavigation() {
 		if (keyNavigation) return;
 		keyNavigation = true;
 		addFocusHighlight();
@@ -286,7 +286,7 @@ public class FermataWebView extends WebView
 				  if (document.getElementById('fermata-focus')) return;
 				  var style = document.createElement('style');
 				  style.id = 'fermata-focus';
-				  style.textContent = ':focus-visible {outline: 2px solid blue !important; border-radius: 5px;}';
+				  style.textContent = ':focus-visible, .fermata-knob {outline: 3px solid #FFE600 !important; outline-offset: 2px; border-radius: 6px;}';
 				  (document.head || document.documentElement).appendChild(style);
 				})()""", null);
 	}

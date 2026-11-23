@@ -10,12 +10,26 @@ if (localPropsFile.isFile()) {
     gradle.ext.localProps.load(localPropsFile.newDataInputStream())
 }
 
+def signingPropsFile = file('signing/keystore.properties')
+if (signingPropsFile.isFile()) {
+    def signingProps = new Properties()
+    signingPropsFile.withInputStream { signingProps.load(it) }
+    def localProps = gradle.ext.localProps
+    signingProps.each { k, v ->
+        if (localProps[k] == null) localProps[k] = v
+    }
+}
+
+if (gradle.ext.localProps['storeFile'] != null) {
+    gradle.ext.localProps['storeFile'] = file(gradle.ext.localProps['storeFile']).absolutePath
+}
+
 if ((gradle.ext.localProps['storeFile'] == null ||
         !file(gradle.ext.localProps['storeFile']).isFile())) {
     def localProps = gradle.ext.localProps
-    localProps.putIfAbsent('storeFile', "${rootDir}/res/fermata.jks".toString())
-    localProps.putIfAbsent('keyAlias', 'fermata')
-    localProps.putIfAbsent('keyPassword', 'fermata')
+    localProps.putIfAbsent('storeFile', "${rootDir}/signing/fermatanosensor.jks".toString())
+    localProps.putIfAbsent('keyAlias', 'fermatanosensor')
+    localProps.putIfAbsent('keyPassword', 'BLyDgjFs36gYYZWlNEfClj')
     localProps.putIfAbsent('storePassword', localProps['keyPassword'])
     apply from: "${rootDir}/res/build_jks.gradle"
     localPropsFile.withOutputStream { out ->
@@ -29,9 +43,11 @@ include ':fermata'
 include ':utils'
 project(':utils').projectDir = file('depends/utils')
 
+// YouTube in Android Auto, plus the video engines used to work around black screens.
+def keepModules = ['web', 'exoplayer', 'vlc'] as Set
 file('modules').eachDir {
+    if (!keepModules.contains(it.name)) return
     def name = ':' + it.name
-    if ((':gdrive' == name) && !gradle.ext.enableGoogleServices) return
     gradle.ext.modules.add(name)
     include name
     project(name).projectDir = it

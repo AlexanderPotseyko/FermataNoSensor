@@ -16,6 +16,7 @@ import static android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED;
 import static android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static me.aap.fermata.BuildConfig.AUTO;
+import static me.aap.fermata.BuildConfig.YOUTUBE_ONLY;
 import static me.aap.fermata.action.KeyEventHandler.handleKeyEvent;
 import static me.aap.fermata.ui.activity.MainActivityPrefs.BRIGHTNESS;
 import static me.aap.fermata.ui.activity.MainActivityPrefs.CHANGE_BRIGHTNESS;
@@ -154,7 +155,7 @@ public class MainActivityDelegate extends ActivityDelegate
 	public static final String INTENT_ACTION_PLAY = "play";
 	public static final String INTENT_ACTION_UPDATE = "update";
 	public static final String INTENT_ACTION_FINISH = "finish";
-	private static final String INTENT_SCHEME = "fermata";
+	private static final String INTENT_SCHEME = "fermatanosensor";
 	private final HandlerExecutor handler = new HandlerExecutor(App.get().getHandler().getLooper());
 	private final NavBarMediator navBarMediator = new NavBarMediator();
 	private final FermataServiceUiBinder mediaServiceBinder;
@@ -327,6 +328,10 @@ public class MainActivityDelegate extends ActivityDelegate
 		return completed(false);
 	}
 
+	private static int startFragmentId() {
+		return YOUTUBE_ONLY ? R.id.youtube_fragment : R.id.folders_fragment;
+	}
+
 	private void defaultIntent() {
 		if (getActiveFragment() != null) {
 			checkUpdates();
@@ -348,12 +353,12 @@ public class MainActivityDelegate extends ActivityDelegate
 			if ((fail1 != null) && !isCancellation(fail1)) {
 				Log.e(fail1, "Last played track not found");
 			}
-			if ((ok == null) || !ok) showFragment(R.id.folders_fragment);
+			if ((ok == null) || !ok) showFragment(startFragmentId());
 			checkUpdates();
 		});
 
 		if (!f.isDone() || f.isFailed() || !Boolean.TRUE.equals(f.peek())) {
-			showFragment(R.id.folders_fragment);
+			showFragment(startFragmentId());
 			setContentLoading(f);
 		}
 	}
@@ -694,7 +699,7 @@ public class MainActivityDelegate extends ActivityDelegate
 
 	public void backToNavFragment() {
 		int id = getActiveNavItemId();
-		showFragment((id == ID_NULL) ? R.id.folders_fragment : id);
+		showFragment((id == ID_NULL) ? startFragmentId() : id);
 	}
 
 	@Override
