@@ -521,6 +521,7 @@ public class MediaSessionCallback extends MediaSessionCompat.Callback
 
 	@Override
 	public void onPlay() {
+		if (me.aap.fermata.ui.activity.TvTransport.play()) return;
 		// Only a request from another app (e.g. Android Auto's autoplay or a media button) may be handed
 		// off. Fermata's own controls call this directly, outside of a session request.
 		boolean handOff = otherAppKeyAction || isRequestFromOtherApp();
@@ -646,6 +647,7 @@ public class MediaSessionCallback extends MediaSessionCompat.Callback
 
 	@Override
 	public void onPause() {
+		if (me.aap.fermata.ui.activity.TvTransport.pause()) return;
 		PlayableItem i;
 		MediaEngine eng = getEngine();
 		if ((eng == null) || ((i = eng.getSource()) == null)) return;
@@ -757,6 +759,7 @@ public class MediaSessionCallback extends MediaSessionCompat.Callback
 
 	@Override
 	public void onSkipToPrevious() {
+		if (me.aap.fermata.ui.activity.TvTransport.seek(-10)) return;
 		playerTask.cancel();
 		playerTask = skipTo(false, false);
 	}
@@ -768,6 +771,7 @@ public class MediaSessionCallback extends MediaSessionCompat.Callback
 
 	@Override
 	public void onSkipToNext() {
+		if (me.aap.fermata.ui.activity.TvTransport.seek(10)) return;
 		playerTask.cancel();
 		playerTask = skipTo(true, false);
 	}

@@ -15,7 +15,7 @@ On the YouTube page the rotary knob (DPAD up/down or `SOURCE_ROTARY_ENCODER` scr
 
 Settings on the phone (Шайба) record those events to `knob.log` (about 1 MB) and can share or clear the file. Pointer drags are not stored. Each line includes the YouTube mode.
 
-Settings → YouTube → «Режим YouTube» defaults to «Веб-страница». «ТВ-режим (эксперимент)» loads `https://www.youtube.com/tv` with the VacuumTube Cobalt user agent. Cookies stay in the app WebView. Sign in from the code on that page at `https://www.youtube.com/activate` in another browser. «Поворот шайбы в ТВ-режиме» defaults to up/down. If `/tv` redirects away, that visit falls back to the web page. Web mode keeps the yellow focus outline.
+Settings → YouTube → «Режим YouTube» defaults to «Веб-страница» and shows the selected value. «ТВ-режим (эксперимент)» loads `https://www.youtube.com/tv` with the VacuumTube Cobalt user agent. On the car screen the Fermata bar is hidden unless «Панель в машине» is on. Back at the TV home opens Обновить / Главная YouTube / Закрыть. Clockwise rotation moves down; «Инвертировать поворот шайбы» flips it. A redirect to `youtube.com/?app=desktop` reloads `/tv` and falls back to the web page only after repeated failures. Web mode keeps the yellow focus outline.
 
 
 ## Fermata Media Player

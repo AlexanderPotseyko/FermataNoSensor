@@ -340,7 +340,8 @@ public class SettingsFragment extends MainActivityFragment
 			o.store = a.getPrefs();
 			o.pref = MainActivityPrefs.YT_UI_MODE;
 			o.title = R.string.yt_ui_mode;
-			o.subtitle = R.string.yt_ui_mode_sub;
+			o.subtitle = R.string.string_format;
+			o.formatSubtitle = true;
 			o.values = new int[]{R.string.yt_ui_web, R.string.yt_ui_tv};
 			o.valuesMap = new int[]{MainActivityPrefs.YT_MODE_WEB, MainActivityPrefs.YT_MODE_TV};
 		});
@@ -352,6 +353,18 @@ public class SettingsFragment extends MainActivityFragment
 			o.formatSubtitle = true;
 			o.values = new int[]{R.string.yt_knob_vertical, R.string.yt_knob_horizontal};
 			o.valuesMap = new int[]{MainActivityPrefs.YT_KNOB_VERTICAL, MainActivityPrefs.YT_KNOB_HORIZONTAL};
+		});
+		sub1.addBooleanPref(o -> {
+			o.store = a.getPrefs();
+			o.pref = MainActivityPrefs.YT_KNOB_INVERT;
+			o.title = R.string.yt_knob_invert;
+			o.subtitle = R.string.yt_knob_invert_sub;
+		});
+		sub1.addBooleanPref(o -> {
+			o.store = a.getPrefs();
+			o.pref = MainActivityPrefs.YT_CAR_PANEL;
+			o.title = R.string.yt_car_panel;
+			o.subtitle = R.string.yt_car_panel_sub;
 		});
 
 		sub1 = set.subSet(o -> o.title = R.string.knob_log_section);

@@ -69,7 +69,8 @@ public class YoutubeJsInterface extends FermataJsInterface {
 				if ("left".equals(data)) getYoutubeWebView().focusNavBar();
 				break;
 			case JS_TV_DIAG:
-				KnobLog.note(data);
+				if ((data != null) && data.startsWith("state ")) getYoutubeWebView().onTvState(data);
+				else KnobLog.note(data);
 				break;
 			default:
 				super.handleEvent(event, data);
