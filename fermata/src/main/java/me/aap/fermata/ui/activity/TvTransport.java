@@ -42,6 +42,11 @@ public final class TvTransport {
 		playback = next;
 	}
 
+	/** True while the TV WebView is the player and owns audio focus itself. */
+	public static boolean active() {
+		return target != null;
+	}
+
 	public static boolean play() {
 		Target t = target;
 		return (t != null) && t.play();

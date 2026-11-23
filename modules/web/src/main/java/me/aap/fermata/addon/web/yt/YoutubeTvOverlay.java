@@ -73,31 +73,37 @@ final class YoutubeTvOverlay extends LinearLayout implements YoutubeWebView.TvHo
 		open = false;
 		setVisibility(GONE);
 		items.removeAllViews();
+		web.setVisibility(VISIBLE);
 		web.requestFocus();
 		KnobLog.note("menu close");
 	}
 
 	@Override
 	public void onLoadStart() {
-		if (isOpen()) return;
 		cancelRetry();
 		items.removeAllViews();
 		open = false;
 		progress.setVisibility(VISIBLE);
 		message.setText(me.aap.fermata.R.string.yt_loading);
 		setVisibility(VISIBLE);
+		bringToFront();
+		// The WebView surface paints above siblings. Hide it so the spinner stays visible.
+		web.setVisibility(INVISIBLE);
 	}
 
 	@Override
 	public void onLoaded() {
 		tries = 0;
 		cancelRetry();
-		if (!isOpen()) setVisibility(GONE);
+		if (isOpen()) return;
+		setVisibility(GONE);
+		web.setVisibility(VISIBLE);
 	}
 
 	@Override
 	public void onLoadError(String description) {
 		KnobLog.note("tv error overlay: " + description);
+		web.setVisibility(INVISIBLE);
 		if (tries < MAX_TRIES) {
 			tries++;
 			progress.setVisibility(VISIBLE);

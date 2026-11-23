@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.view.InputDevice;
 import android.view.KeyEvent;
@@ -38,22 +39,55 @@ public final class KnobLog {
 	});
 	private static final SimpleDateFormat TIME =
 			new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US);
+	private static final Object LOCK = new Object();
 	private static long lastHash;
 	private static volatile String mode = "web";
+	private static FileOutputStream out;
+	private static File outFile;
 
 	private KnobLog() {
 	}
 
 	public static boolean enabled() {
-		return FermataApplication.get().getPreferenceStore()
-				.getBooleanPref(MainActivityPrefs.KNOB_LOG);
+		try {
+			// Same store the settings checkbox writes (default shared prefs, name "fermata").
+			return MainActivityPrefs.get().getBooleanPref(MainActivityPrefs.KNOB_LOG);
+		} catch (Throwable err) {
+			android.util.Log.e("FermataNoSensor", "knob pref", err);
+			return true;
+		}
 	}
 
 	public static File file() {
-		Context ctx = FermataApplication.get();
-		File dir = ctx.getExternalFilesDir(null);
-		if ((dir == null) || (!dir.isDirectory() && !dir.mkdirs())) dir = ctx.getFilesDir();
+		FermataApplication app = FermataApplication.get();
+		File log = app.getLogFile();
+		File dir = (log == null) ? null : log.getParentFile();
+		if ((dir == null) || (!dir.isDirectory() && !dir.mkdirs())) dir = app.getExternalFilesDir(null);
+		if ((dir == null) || (!dir.isDirectory() && !dir.mkdirs())) dir = app.getFilesDir();
 		return new File(dir, "knob.log");
+	}
+
+	/**
+	 * Creates the file immediately and records its path. Not gated on the setting: a missing line
+	 * was indistinguishable from a disabled pref or a write that died with the process.
+	 */
+	public static void init() {
+		File f = file();
+		String line = stamp() + " knob log init path=" + f.getAbsolutePath() + " " + prefDetail() + "\n";
+		android.util.Log.i("FermataNoSensor", line.trim());
+		Log.i(line.trim());
+		writeLine(line);
+	}
+
+	private static String prefDetail() {
+		try {
+			SharedPreferences sp = FermataApplication.get().getDefaultSharedPreferences();
+			String key = MainActivityPrefs.KNOB_LOG.getName();
+			if (!sp.contains(key)) return "enabled=" + enabled() + " pref=absent";
+			return "enabled=" + enabled() + " pref=" + sp.getBoolean(key, true);
+		} catch (Throwable err) {
+			return "enabled=true pref-error=" + err;
+		}
 	}
 
 	/** Marks the YouTube mode for the following lines. Writes a session header when logging is on. */
@@ -116,14 +150,15 @@ public final class KnobLog {
 	}
 
 	public static void clear(Context ctx) {
-		IO.execute(() -> {
+		synchronized (LOCK) {
+			closeOut();
 			File f = file();
 			File prev = new File(f.getParentFile(), "knob.log.1");
 			//noinspection ResultOfMethodCallIgnored
 			f.delete();
 			//noinspection ResultOfMethodCallIgnored
 			prev.delete();
-		});
+		}
 		UiUtils.showInfo(ctx, ctx.getString(R.string.knob_log_cleared));
 	}
 
@@ -180,20 +215,45 @@ public final class KnobLog {
 	}
 
 	private static void append(String line) {
-		try {
-			File f = file();
-			if (f.length() > MAX_BYTES) {
-				File prev = new File(f.getParentFile(), "knob.log.1");
-				//noinspection ResultOfMethodCallIgnored
-				prev.delete();
-				//noinspection ResultOfMethodCallIgnored
-				f.renameTo(prev);
-			}
-			try (FileOutputStream out = new FileOutputStream(f, true)) {
+		writeLine(line);
+	}
+
+	private static void writeLine(String line) {
+		synchronized (LOCK) {
+			try {
+				File f = file();
+				if ((out != null) && (outFile != null) && !outFile.equals(f)) closeOut();
+				if ((out != null) && (outFile != null) && (outFile.length() > MAX_BYTES)) {
+					closeOut();
+					File prev = new File(f.getParentFile(), "knob.log.1");
+					//noinspection ResultOfMethodCallIgnored
+					prev.delete();
+					//noinspection ResultOfMethodCallIgnored
+					f.renameTo(prev);
+				}
+				if (out == null) {
+					outFile = f;
+					out = new FileOutputStream(f, true);
+				}
 				out.write(line.getBytes(StandardCharsets.UTF_8));
+				out.flush();
+				out.getFD().sync();
+			} catch (Exception err) {
+				closeOut();
+				android.util.Log.e("FermataNoSensor", "knob log write " + err);
+				Log.e(err, "Knob log write failed");
 			}
-		} catch (Exception err) {
-			Log.e(err, "Knob log write failed");
 		}
+	}
+
+	private static void closeOut() {
+		if (out != null) {
+			try {
+				out.close();
+			} catch (Exception ignore) {
+			}
+			out = null;
+		}
+		outFile = null;
 	}
 }

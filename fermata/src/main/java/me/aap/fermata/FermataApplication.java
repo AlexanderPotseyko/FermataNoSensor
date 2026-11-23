@@ -17,7 +17,9 @@ import java.util.Locale;
 
 import me.aap.fermata.addon.AddonManager;
 import me.aap.fermata.media.engine.BitmapCache;
+import me.aap.fermata.ui.activity.KnobLog;
 import me.aap.fermata.ui.activity.MainActivityPrefs;
+import me.aap.fermata.ui.activity.MainThreadWatch;
 import me.aap.fermata.vfs.FermataVfsManager;
 import me.aap.utils.app.App;
 import me.aap.utils.app.NetSplitCompatApp;
@@ -46,6 +48,8 @@ public class FermataApplication extends NetSplitCompatApp {
 		super.onCreate();
 		vfsManager = new FermataVfsManager();
 		bitmapCache = new BitmapCache();
+		MainThreadWatch.install();
+		KnobLog.init();
 	}
 
 	@Override

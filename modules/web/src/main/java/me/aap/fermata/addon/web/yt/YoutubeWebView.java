@@ -74,6 +74,8 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	private boolean mainFrameFailed;
 	private boolean allowFocusLeave;
 	private int desktopRedirects;
+	private int tvLoadEpoch;
+	private boolean tvLoadInside;
 	private TvHost tvHost;
 	private ViewTreeObserver.OnGlobalFocusChangeListener focusLogger;
 
@@ -299,14 +301,29 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	@Override
 	public void loadUrl(@NonNull String url) {
 		Log.d("Loading URL: " + url);
-		if (tvActive() && (tvHost != null) && TV_HOME.equals(url)) tvHost.onLoadStart();
-		super.loadUrl(url);
+		boolean show = tvActive() && (tvHost != null) && isTvDestination(url);
+		if (show) beginTvLoad();
+		tvLoadInside = show;
+		try {
+			super.loadUrl(url);
+		} finally {
+			tvLoadInside = false;
+		}
 	}
 
 	void reloadTv() {
 		desktopRedirects = 0;
 		mainFrameFailed = false;
 		loadUrl(TV_HOME);
+	}
+
+	private static boolean isTvDestination(String url) {
+		return (url != null) && (url.startsWith(TV_HOME) || url.contains("youtube.com/tv"));
+	}
+
+	private void beginTvLoad() {
+		tvLoadEpoch++;
+		tvHost.onLoadStart();
 	}
 
 	@Override
@@ -419,9 +436,15 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 			desktopRedirects = 0;
 			installTvDiag();
 			notePlayer(uri, true);
-			if (tvHost != null) tvHost.onLoaded();
+			if ((tvHost != null) && !tvLoadInside) {
+				int epoch = tvLoadEpoch;
+				post(() -> {
+					if ((epoch != tvLoadEpoch) || (tvHost == null)) return;
+					tvHost.onLoaded();
+					requestFocus();
+				});
+			}
 			allowFocusLeave = false;
-			requestFocus();
 			CookieManager.getInstance().flush();
 			return;
 		}
@@ -662,6 +685,7 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 	}
 
 	void onTvState(String data) {
+		long t0 = SystemClock.uptimeMillis();
 		boolean open = (data != null) && data.contains("player=1");
 		boolean paused = (data == null) || data.contains("paused=1");
 		if (data != null) {
@@ -678,6 +702,8 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 		playerPaused = paused;
 		KnobLog.note("player " + (open ? "open" : "closed") + " paused=" + (paused ? 1 : 0) + " " + data);
 		TvTransport.playback(open, paused);
+		long dt = SystemClock.uptimeMillis() - t0;
+		if (dt > 200) Log.w("main thread ", dt, " ms onTvState");
 	}
 
 	void openTvVideo(Video video) {
@@ -827,8 +853,11 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 						"    open = r.width > innerWidth * 0.55 && r.height > innerHeight * 0.45 && v.readyState > 0;\n" +
 						"  }\n" +
 						"  var skip = document.querySelector('ytlr-skip-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, button[aria-label*=\"Skip\"], button[aria-label*=\"Пропустить\"]');\n" +
-						"  if (skip) { try { skip.focus(); } catch (e) {} }\n" +
+						"  if (skip && window.__ftvSkip !== skip) { window.__ftvSkip = skip; try { skip.focus(); } catch (e) {} }\n" +
 						"  var paused = !v || v.paused ? 1 : 0;\n" +
+						"  var sig = (open ? 1 : 0) + ':' + paused + ':' + location.href;\n" +
+						"  if (window.__ftvSig === sig) return;\n" +
+						"  window.__ftvSig = sig;\n" +
 						"  " + JS_EVENT + "(" + JS_TV_DIAG + ", 'state player=' + (open ? 1 : 0) + ' paused=' + paused + ' ' + location.href);\n" +
 						"}\n" +
 						"if (!window.__ftvState) {\n" +
@@ -836,7 +865,7 @@ public class YoutubeWebView extends FermataWebView implements CarInputSink {
 						"  window.addEventListener('hashchange', fermataTvState);\n" +
 						"  window.addEventListener('popstate', fermataTvState);\n" +
 						"}\n" +
-						"setInterval(fermataTvState, 400);\n" +
+						"if (!window.__ftvTimer) window.__ftvTimer = setInterval(fermataTvState, 1000);\n" +
 						"setTimeout(function() {\n" +
 						"  var vids = document.querySelectorAll('video');\n" +
 						"  var live = false;\n" +

@@ -81,6 +81,7 @@ import android.media.session.PlaybackState;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.SystemClock;
 import android.support.v4.media.MediaDescriptionCompat;
 import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
@@ -192,6 +193,14 @@ public class MediaSessionCallback extends MediaSessionCompat.Callback
 	private boolean playOnPrepared;
 	private boolean playOnAudioFocus;
 	private boolean isMuted;
+	private boolean tvFocusReleased;
+	private boolean tvKnown;
+	private boolean tvOpen;
+	private boolean tvPaused = true;
+	private boolean tvQueued;
+	private boolean tvPendingOpen;
+	private boolean tvPendingPaused = true;
+	private long tvPublishAt;
 	private boolean tryAnotherEngine;
 	@NonNull
 	private PlaybackStateCompat currentState;
@@ -647,21 +656,58 @@ public class MediaSessionCallback extends MediaSessionCompat.Callback
 	}
 
 	public void noteTvPlayback(boolean playerOpen, boolean paused) {
-		if (!playerOpen) return;
-		if ((audioManager != null) && (audioFocusReq != null)) {
-			AudioManagerCompat.requestAudioFocus(audioManager, audioFocusReq);
+		// Chromium requests focus for the WebView. Taking it here makes AUDIOFOCUS_LOSS pause the
+		// video, the page starts again, and the session requests focus once more.
+		if (playerOpen && me.aap.fermata.ui.activity.TvTransport.active()) {
+			if (!tvFocusReleased && (audioManager != null) && (audioFocusReq != null)) {
+				tvFocusReleased = true;
+				AudioManagerCompat.abandonAudioFocusRequest(audioManager, audioFocusReq);
+			}
+			if (!session.isActive()) session.setActive(true);
 		}
-		if (!session.isActive()) session.setActive(true);
+		tvPendingOpen = playerOpen;
+		tvPendingPaused = paused;
+		if (tvKnown && (tvOpen == playerOpen) && (tvPaused == paused)) return;
+		if (tvQueued) return;
+		tvQueued = true;
+		long wait = tvKnown ? Math.max(0L, 500L - (SystemClock.uptimeMillis() - tvPublishAt)) : 500L;
+		handler.postDelayed(this::publishTvSession, wait);
+	}
+
+	private void publishTvSession() {
+		long t0 = SystemClock.uptimeMillis();
+		tvQueued = false;
+		if (!tvPendingOpen) {
+			boolean wasOpen = tvOpen;
+			tvKnown = true;
+			tvOpen = false;
+			tvPaused = true;
+			tvPublishAt = t0;
+			if (wasOpen) publishTvState(true);
+			return;
+		}
+		if (tvKnown && tvOpen && (tvPaused == tvPendingPaused)) return;
+		tvKnown = true;
+		tvOpen = true;
+		tvPaused = tvPendingPaused;
+		tvPublishAt = t0;
+		publishTvState(tvPaused);
+		long dt = SystemClock.uptimeMillis() - t0;
+		if (dt > 200) Log.w("main thread ", dt, " ms noteTvPlayback");
+	}
+
+	private void publishTvState(boolean paused) {
 		int st = paused ? STATE_PAUSED : STATE_PLAYING;
-		if ((currentState.getState() == st) && (metadata != null)) return;
 		PlaybackStateCompat state = new PlaybackStateCompat.Builder()
 				.setActions(ACTION_PLAY | ACTION_PAUSE | ACTION_PLAY_PAUSE | ACTION_STOP |
 						ACTION_SKIP_TO_NEXT | ACTION_SKIP_TO_PREVIOUS | ACTION_SEEK_TO)
 				.setState(st, 0, paused ? 0f : 1f).build();
 		setPlaybackState(state);
-		session.setMetadata(new MediaMetadataCompat.Builder()
-				.putString(METADATA_KEY_DISPLAY_TITLE, "YouTube")
-				.putString(METADATA_KEY_DISPLAY_SUBTITLE, "FermataNoSensor").build());
+		if (metadata == null) {
+			setMetadata(new MediaMetadataCompat.Builder()
+					.putString(METADATA_KEY_DISPLAY_TITLE, "YouTube")
+					.putString(METADATA_KEY_DISPLAY_SUBTITLE, "FermataNoSensor").build());
+		}
 		Log.i("TV media session " + (paused ? "paused" : "playing"));
 	}
 
@@ -1305,6 +1351,10 @@ public class MediaSessionCallback extends MediaSessionCompat.Callback
 	@Override
 	public void onAudioFocusChange(int focusChange) {
 		Log.i("Audio focus event received: ", focusChange);
+		if (me.aap.fermata.ui.activity.TvTransport.active()) {
+			Log.i("Audio focus ignored, WebView owns playback: ", focusChange);
+			return;
+		}
 
 		switch (focusChange) {
 			case AUDIOFOCUS_GAIN:
@@ -1463,6 +1513,11 @@ public class MediaSessionCallback extends MediaSessionCompat.Callback
 		fireBroadcastEvent(l -> l.onPlaybackStateChanged(this, state));
 
 		if (state.getState() == STATE_PLAYING) {
+			// The TV page is not an engine item. A duration timer would call skip and seek the video.
+			if (me.aap.fermata.ui.activity.TvTransport.active()) {
+				stopTimer();
+				return;
+			}
 			MediaEngine engine = getEngine();
 			if (engine == null) {
 				stopTimer();

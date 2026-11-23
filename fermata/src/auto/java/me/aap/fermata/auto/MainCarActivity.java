@@ -172,6 +172,7 @@ public class MainCarActivity extends CarActivity implements FermataActivity {
 
 	private void installInputHooks() {
 		if (inputHooks) return;
+		KnobLog.init();
 		try {
 			Window w = getWindow();
 			if (w == null) {
